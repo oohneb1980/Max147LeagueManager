@@ -46,6 +46,16 @@
   /* Radii */
   --r:    7px;
   --r-lg: 12px;
+  --r-xl: 18px;  /* large cards */
+
+  /* Type scale — clear hierarchy jumps, not 1px increments */
+  --text-xs:   11px;
+  --text-sm:   12px;
+  --text-base: 14px;
+  --text-md:   16px;
+  --text-lg:   20px;
+  --text-xl:   26px;
+  --text-2xl:  34px;
 
   /* Z-index scale */
   --z-sticky: 10;
@@ -99,16 +109,25 @@ body {
 }
 
 .logo {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 16px; font-weight: 700; letter-spacing: .02em;
-  color: var(--gold); white-space: nowrap;
-  cursor: pointer; text-decoration: none;
+  display: flex; align-items: center; gap: 8px;
+  white-space: nowrap; cursor: pointer; text-decoration: none;
   transition: opacity .12s; flex-shrink: 0;
 }
 .logo:focus-visible { outline-offset: 4px; }
-.logo-ball { font-size: 18px; }
-.logo-text { display: flex; align-items: baseline; gap: 0; }
-.logo .sub { font-weight: 400; font-size: 11px; color: var(--ink-3); margin-left: 6px; }
+.logo-ball { font-size: 20px; line-height: 1; }
+/* Logo wordmark — heavy tracking, two-tone */
+.logo-wordmark {
+  display: flex; align-items: baseline; gap: 0;
+  font-size: 15px; font-weight: 800;
+  letter-spacing: .06em; line-height: 1;
+}
+.logo-wordmark .num { color: var(--gold); }
+.logo-wordmark .max { color: var(--ink); letter-spacing: .04em; }
+.logo .sub {
+  font-weight: 400; font-size: 11px; color: var(--ink-3);
+  margin-left: 8px; letter-spacing: .02em;
+  padding-left: 8px; border-left: 1px solid var(--border);
+}
 
 /* Divider between logo and breadcrumb */
 .logo-sep {
@@ -192,63 +211,79 @@ body {
 .main { flex: 1; padding: 24px 20px; max-width: 1160px; margin: 0 auto; width: 100%; }
 
 /* ── LEAGUE HUB ─────────────────────────────────────────── */
-.hub-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px; flex-wrap: wrap; gap: 12px; }
-.hub-title { font-size: 22px; font-weight: 700; color: var(--ink); display: flex; align-items: center; gap: 10px; letter-spacing: -.02em; }
-.hub-title .ball { font-size: 24px; }
+.hub-header { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 28px; flex-wrap: wrap; gap: 12px; }
+.hub-title {
+  font-size: clamp(22px, 4vw, 32px); font-weight: 800;
+  color: var(--ink); letter-spacing: -.03em; line-height: 1;
+}
+.hub-title .ball { font-size: 28px; vertical-align: -.06em; margin-right: 4px; }
 .leagues-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
 
 /* League card — single border, no shadow duplication */
 .league-card {
   background: var(--bg-card); border: 1px solid var(--border);
   border-radius: var(--r-lg); padding: 0; cursor: pointer;
-  transition: border-color .15s, translate .1s;
-  overflow: hidden;
+  transition: border-color 150ms var(--ease-out);
+  overflow: hidden; position: relative;
 }
-.league-card:focus-visible { outline-offset: 3px; }
-
-/* Active border: single gold border only, no box-shadow duplication */
+/* Coloured left accent by competition type */
+.league-card::before {
+  content: ''; position: absolute; top: 0; left: 0;
+  width: 3px; height: 100%;
+  background: var(--lc-accent, var(--border-2));
+  transition: opacity 150ms ease;
+}
+.league-card[data-ct="league"]::before      { background: var(--blue); }
+.league-card[data-ct="single_elim"]::before { background: var(--amber); }
+.league-card[data-ct="double_elim"]::before { background: var(--red); }
+.league-card[data-ct="group_stage"]::before { background: var(--green); }
 .league-card.active-league { border-color: var(--gold); }
 
-.lc-top { padding: 18px 18px 14px; display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
-.lc-name { font-size: 15px; font-weight: 700; color: var(--ink); margin-bottom: 4px; line-height: 1.3; letter-spacing: -.01em; }
+.lc-top { padding: 18px 18px 14px 20px; display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.lc-name { font-size: 16px; font-weight: 700; color: var(--ink); margin-bottom: 4px; line-height: 1.25; letter-spacing: -.02em; }
 .lc-meta { font-size: 12px; color: var(--ink-2); display: flex; flex-direction: column; gap: 3px; }
 .lc-meta span { display: flex; align-items: center; gap: 4px; }
 .lc-status { flex-shrink: 0; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
 .lc-stats {
-  padding: 11px 18px; border-top: 1px solid var(--border);
-  display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;
-  background: oklch(10% 0.03 155 / 0.5);
+  padding: 12px 18px 12px 20px; border-top: 1px solid var(--border);
+  display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0;
+  background: oklch(10% 0.03 155 / 0.4);
 }
-.lc-stat { text-align: center; }
-.lc-stat-val { font-size: 17px; font-weight: 700; color: var(--ink); }
-/* Plain readable label — no uppercase eyebrow */
-.lc-stat-lbl { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
-.lc-foot { padding: 10px 18px; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.lc-stat { text-align: center; padding: 4px 0; }
+.lc-stat + .lc-stat { border-left: 1px solid var(--border); }
+.lc-stat-val { font-size: 20px; font-weight: 800; color: var(--ink); font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+.lc-stat-lbl { font-size: 10px; color: var(--ink-3); margin-top: 3px; text-transform: uppercase; letter-spacing: .04em; }
+.lc-foot { padding: 10px 18px 10px 20px; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .lc-open-btn { font-size: 12px; font-weight: 600; color: var(--gold); background: none; border: none; cursor: pointer; font-family: inherit; display: flex; align-items: center; gap: 4px; padding: 4px 0; transition: color .12s; }
 .lc-open-btn:focus-visible { outline-offset: 2px; }
 .lc-actions { display: flex; gap: 2px; }
+
+/* New competition card — inviting, not placeholder-looking */
 .new-league-card {
-  background: transparent; border: 1px dashed var(--border-2);
+  background: var(--gold-muted);
+  border: 1px solid oklch(72% 0.12 82 / .20);
   border-radius: var(--r-lg); cursor: pointer;
   transition: border-color .15s, background .15s;
   display: flex; align-items: center; justify-content: center;
-  flex-direction: column; gap: 8px; min-height: 186px; color: var(--ink-3);
+  flex-direction: column; gap: 10px; min-height: 186px; color: var(--gold-dim);
 }
 .new-league-card:focus-visible { outline-offset: 3px; }
-.new-league-card .plus { font-size: 26px; line-height: 1; }
-.new-league-card .lbl { font-size: 13px; font-weight: 500; }
+.new-league-card .plus { font-size: 28px; line-height: 1; opacity: .7; }
+.new-league-card .lbl { font-size: 13px; font-weight: 600; color: var(--gold-dim); letter-spacing: -.01em; }
 
 /* ── PANELS ─────────────────────────────────────────────── */
 .panel { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 20px; margin-bottom: 16px; }
+/* Panels inside a panel inherit depth */
+.panel .panel { background: var(--bg-raised); }
 .panel-hd { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 /* panel-title: readable label, not tiny uppercase eyebrow */
 .panel-title { font-size: 13px; font-weight: 600; color: var(--ink-2); }
 .sec-title {
-  font-size: 15px; font-weight: 700; color: var(--ink);
-  display: flex; align-items: center; gap: 10px; margin-bottom: 18px;
-  letter-spacing: -.01em;
+  font-size: 18px; font-weight: 800; color: var(--ink);
+  display: flex; align-items: center; gap: 10px; margin-bottom: 20px;
+  letter-spacing: -.03em; line-height: 1;
 }
-.sec-title::before { content: ''; width: 3px; height: 17px; background: var(--gold); border-radius: 2px; flex-shrink: 0; }
+/* No universal stripe — let size & weight do the hierarchy work */
 
 /* ── FORM ───────────────────────────────────────────────── */
 .form-row { display: grid; gap: 12px; margin-bottom: 12px; }
@@ -297,7 +332,14 @@ input[type=number]::-webkit-inner-spin-button { opacity: .4; }
 .btn-icon:focus-visible { outline-offset: 2px; }
 
 /* ── BADGES ─────────────────────────────────────────────── */
-.badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; }
+/* Base badge */
+.badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; letter-spacing: .01em; }
+
+/* STATUS badges — pill shape (rounded), softer */
+.badge-active, .badge-draft, .badge-archived, .badge-closed,
+.badge-scheduled, .badge-live, .badge-completed {
+  border-radius: 20px;
+}
 .badge-active   { background: rgba(63,191,122,.13); color: var(--green); }
 .badge-draft    { background: rgba(91,155,213,.13); color: var(--blue); }
 .badge-archived { background: rgba(107,99,80,.18); color: var(--ink-3); }
@@ -335,11 +377,13 @@ th:hover, th.sorted { color: var(--gold); }
 td { padding: 10px 12px; border-bottom: 1px solid rgba(201,168,76,.05); white-space: nowrap; }
 tbody tr { transition: background .08s; }
 tbody tr:hover { background: rgba(201,168,76,.04); }
-.rank-cell { font-size: 15px; font-weight: 700; }
-.r1 { color: #FFD700; } .r2 { color: #C0C0C0; } .r3 { color: #CD7F32; }
+.rank-cell { font-size: 17px; font-weight: 800; font-family: 'JetBrains Mono', monospace; }
+.r1 { color: #FFD700; }
+.r2 { color: #C0C0C0; }
+.r3 { color: #CD7F32; }
 .name-cell { font-weight: 600; }
 .fd-pos { color: var(--green); } .fd-neg { color: var(--red); }
-.pts-cell { font-size: 16px; font-weight: 700; color: var(--gold); font-family: 'JetBrains Mono', monospace; }
+.pts-cell { font-size: 18px; font-weight: 800; color: var(--gold); font-family: 'JetBrains Mono', monospace; letter-spacing: -.02em; }
 
 /* ── SUMMARY BAR (replaces stat grid hero-metric template) ─ */
 .summary-bar {
@@ -353,11 +397,11 @@ tbody tr:hover { background: rgba(201,168,76,.04); }
 }
 .summary-item:last-child { border-right: none; }
 .summary-item.clickable { cursor: pointer; transition: background .1s; }
-.summary-val { font-size: 20px; font-weight: 700; color: var(--ink); line-height: 1; margin-bottom: 3px; font-variant-numeric: tabular-nums; }
+.summary-val { font-size: 24px; font-weight: 800; color: var(--ink); line-height: 1; margin-bottom: 4px; font-variant-numeric: tabular-nums; letter-spacing: -.03em; }
 .summary-val.gold { color: var(--gold); }
 .summary-val.green { color: var(--green); }
-.summary-lbl { font-size: 11px; color: var(--ink-2); }
-.summary-sub { font-size: 11px; color: var(--ink-3); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.summary-lbl { font-size: 10px; font-weight: 500; color: var(--ink-3); text-transform: uppercase; letter-spacing: .06em; }
+.summary-sub { font-size: 11px; color: var(--ink-3); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ── SUB TABS ───────────────────────────────────────────── */
 .sub-tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
@@ -390,9 +434,18 @@ tbody tr:hover { background: rgba(201,168,76,.04); }
 .match-card {
   background: var(--bg-raised); border: 1px solid var(--border);
   border-radius: var(--r-lg); padding: 14px 16px; margin-bottom: 10px;
-  transition: border-color .12s;
+  transition: border-color 120ms var(--ease-out);
+  position: relative; overflow: hidden;
 }
-.match-card.live { border-color: rgba(63,191,122,.32); }
+/* Live match: green left bar + subtle bg tint */
+.match-card.live {
+  border-color: rgba(63,191,122,.45);
+  background: oklch(22% 0.06 155);
+}
+.match-card.live::before {
+  content: ''; position: absolute; top: 0; left: 0;
+  width: 3px; height: 100%; background: var(--green);
+}
 .match-card.needs-details { border-color: rgba(230,168,23,.3); }
 .match-card.needs-details:hover { border-color: rgba(230,168,23,.55); }
 .match-top { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
@@ -402,9 +455,10 @@ tbody tr:hover { background: rgba(201,168,76,.04); }
 .score-row { display: flex; align-items: center; gap: 8px; }
 .score-box {
   background: var(--bg); border: 1px solid var(--border-2);
-  border-radius: 6px; padding: 5px 14px;
-  font-size: 20px; font-weight: 700; min-width: 48px; text-align: center;
+  border-radius: 8px; padding: 6px 16px;
+  font-size: 24px; font-weight: 800; min-width: 52px; text-align: center;
   font-family: 'JetBrains Mono', monospace;
+  letter-spacing: -.04em; line-height: 1;
 }
 .match-foot { margin-top: 10px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .hb-note { font-size: 11px; color: var(--ink-2); }
@@ -498,8 +552,8 @@ tbody tr:hover { background: rgba(201,168,76,.04); }
 .hb-row:last-child { border-bottom: none; }
 .hb-rank { font-size: 14px; font-weight: 700; text-align: center; }
 /* Score: no glow — weight and color do the work */
-.hb-score { font-size: 22px; font-weight: 700; color: var(--gold); font-variant-numeric: tabular-nums; font-family: 'JetBrains Mono', monospace; }
-.hb-score.max { color: #FFD700; font-size: 26px; }
+.hb-score { font-size: 24px; font-weight: 800; color: var(--gold); font-variant-numeric: tabular-nums; font-family: 'JetBrains Mono', monospace; letter-spacing: -.04em; }
+.hb-score.max { color: #FFD700; font-size: 32px; }
 .hb-player { font-weight: 600; font-size: 13px; }
 .hb-meta { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
 .hb-date { font-size: 11px; color: var(--ink-3); text-align: right; }
@@ -517,11 +571,16 @@ tbody tr:hover { background: rgba(201,168,76,.04); }
     height: 48px;
   }
   .logo { font-size: 15px; }
-  .logo .sub { display: none; } /* hide "League Manager" text on mobile */
-  .topbar-row2 { display: none !important; } /* bottom nav replaces this */
+  .logo .sub { display: none; }
+  .topbar-row2 { display: none !important; } /* hidden on mobile — bottom nav used instead */
   .bottom-nav  { display: block; }
-  /* Push main content up above bottom nav */
   .main { padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
+}
+
+/* Desktop: show top tab row, hide bottom nav */
+@media (min-width: 641px) {
+  .topbar-row2 { display: flex; } /* always show on desktop */
+  .bottom-nav  { display: none !important; } /* never show on desktop */
 }
 
 @media (max-width: 640px) {
@@ -624,7 +683,7 @@ tbody tr:hover { background: rgba(201,168,76,.04); }
 
 /* ── MOTION (Emil principles) ───────────────────────────── */
 @keyframes slideUp {
-  from { opacity: 0; transform: translateY(8px); }
+  from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 @keyframes fadeIn {
@@ -995,16 +1054,25 @@ tbody tr:nth-child(n+6){ animation-delay: 100ms;}
 .auth-providers { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
 .auth-provider-btn {
   display: flex; align-items: center; gap: 12px;
-  padding: 12px 16px; border-radius: var(--r);
-  background: var(--bg-raised); border: 1px solid var(--border-2);
-  color: var(--ink); font-size: 14px; font-weight: 500; font-family: inherit;
+  padding: 11px 16px; border-radius: var(--r);
+  background: var(--bg-raised); border: 1px solid var(--border);
+  color: var(--ink); font-size: 13px; font-weight: 500; font-family: inherit;
   cursor: pointer; width: 100%; text-align: left;
   transition: background 120ms ease, border-color 120ms ease, transform 100ms var(--ease-out);
 }
-@media (hover: hover) { .auth-provider-btn:hover { background: var(--bg-hover); border-color: var(--gold-dim); } }
+@media (hover: hover) {
+  .auth-provider-btn:hover { border-color: var(--border-2); background: var(--bg-hover); }
+}
 .auth-provider-btn:active { transform: scale(0.98); }
-.auth-provider-icon { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
-.auth-provider-icon svg { width: 20px; height: 20px; }
+.auth-provider-icon {
+  width: 32px; height: 32px; border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; flex-shrink: 0;
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.08);
+}
+.auth-provider-icon svg { width: 18px; height: 18px; }
+.auth-provider-btn .provider-name { flex: 1; }
+.auth-provider-btn .provider-arrow { color: var(--ink-3); font-size: 12px; }
 
 /* Divider */
 .auth-divider {
@@ -1139,6 +1207,182 @@ tbody tr:nth-child(n+6){ animation-delay: 100ms;}
   .user-table-row, .user-table-hd { grid-template-columns: 1fr 1fr auto; }
   .user-table-row > :last-child, .user-table-hd > :last-child { display: none; }
 }
+
+/* ══════════════════════════════════════════════════════════
+   USER MANAGEMENT PAGE
+══════════════════════════════════════════════════════════ */
+
+/* Hub-level nav bar (shown on hub, not inside a competition) */
+.hub-nav {
+  display: flex; gap: 2px;
+  border-bottom: 1px solid var(--border-2);
+  padding: 0 20px;
+  background: var(--bg);
+}
+.hub-nav-btn {
+  padding: 0 18px; height: 44px;
+  background: none; border: none; border-bottom: 2px solid transparent;
+  font-size: 13px; font-weight: 500; color: var(--ink-2);
+  cursor: pointer; white-space: nowrap; font-family: inherit;
+  transition: color 100ms ease, border-color 100ms ease;
+  display: flex; align-items: center; gap: 6px;
+}
+.hub-nav-btn.active { color: var(--gold); border-bottom-color: var(--gold); }
+@media (hover: hover) { .hub-nav-btn:hover { color: var(--ink); } }
+
+/* User management layout */
+.um-shell { display: flex; flex-direction: column; gap: 0; }
+
+/* Search + filter bar */
+.um-toolbar {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 18px; flex-wrap: wrap;
+}
+.um-search {
+  flex: 1; min-width: 200px;
+  display: flex; align-items: center; gap: 8px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 0 12px; height: 38px;
+}
+.um-search input {
+  flex: 1; background: none; border: none; padding: 0;
+  font-size: 13px; color: var(--ink);
+}
+.um-search input:focus { outline: none; }
+.um-search-icon { color: var(--ink-3); font-size: 14px; flex-shrink: 0; }
+.um-filter-tabs { display: flex; gap: 4px; }
+.um-filter-tab {
+  padding: 6px 12px; border-radius: 20px;
+  font-size: 12px; font-weight: 500; cursor: pointer;
+  background: transparent; border: 1px solid var(--border);
+  color: var(--ink-2); font-family: inherit;
+  transition: all 120ms ease;
+}
+.um-filter-tab.active {
+  background: var(--gold-muted); border-color: var(--gold-dim); color: var(--gold);
+}
+
+/* Stats row */
+.um-stats {
+  display: flex; gap: 0;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--r-lg); overflow: hidden; margin-bottom: 18px;
+}
+.um-stat {
+  flex: 1; padding: 14px 18px; border-right: 1px solid var(--border);
+  text-align: center;
+}
+.um-stat:last-child { border-right: none; }
+.um-stat-val { font-size: 22px; font-weight: 700; color: var(--ink); }
+.um-stat-lbl { font-size: 11px; color: var(--ink-2); margin-top: 3px; }
+
+/* User card grid */
+.um-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+}
+.um-card {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--r-lg); overflow: hidden;
+  transition: border-color 150ms var(--ease-out);
+  animation: slideUp 180ms var(--ease-out) both;
+}
+.um-card:hover { border-color: var(--border-2); }
+.um-card:nth-child(1) { animation-delay: 0ms; }
+.um-card:nth-child(2) { animation-delay: 30ms; }
+.um-card:nth-child(3) { animation-delay: 55ms; }
+.um-card:nth-child(4) { animation-delay: 75ms; }
+.um-card:nth-child(n+5) { animation-delay: 90ms; }
+
+.um-card-top {
+  display: flex; align-items: center; gap: 12px;
+  padding: 16px 16px 12px;
+}
+.um-avatar {
+  width: 44px; height: 44px; border-radius: 50%; flex-shrink: 0;
+  background: var(--bg-raised); border: 1px solid var(--border-2);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; font-weight: 700; color: var(--gold);
+  overflow: hidden;
+}
+.um-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.um-user-info { flex: 1; min-width: 0; }
+.um-user-name {
+  font-size: 14px; font-weight: 700; color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.um-user-email {
+  font-size: 11px; color: var(--ink-3); margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.um-user-meta {
+  font-size: 11px; color: var(--ink-3); margin-top: 3px;
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+
+/* Role pill on card */
+.um-role-pill {
+  padding: 3px 10px; border-radius: 20px;
+  font-size: 11px; font-weight: 700;
+  white-space: nowrap;
+}
+.um-role-super_admin    { background: rgba(201,168,76,.18); color: var(--gold); }
+.um-role-competition_owner { background: rgba(91,155,213,.15); color: var(--blue); }
+.um-role-player         { background: rgba(63,191,122,.13); color: var(--green); }
+
+/* Card footer actions */
+.um-card-foot {
+  display: flex; align-items: center; gap: 6px;
+  padding: 10px 14px; border-top: 1px solid var(--border);
+  background: rgba(0,0,0,.08);
+}
+.um-card-foot .spacer { flex: 1; }
+
+/* Competition memberships inside user card */
+.um-memberships {
+  padding: 0 16px 12px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.um-membership-row {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 12px; color: var(--ink-2);
+  padding: 5px 8px; background: var(--bg-raised);
+  border-radius: var(--r);
+}
+.um-membership-name { font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.um-membership-role { font-size: 10px; font-weight: 600; color: var(--ink-3); margin-left: 6px; flex-shrink: 0; }
+.um-no-memberships { font-size: 12px; color: var(--ink-3); padding: 4px 0; }
+
+/* Invite modal */
+.um-invite-step {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; background: var(--bg-raised);
+  border-radius: var(--r); margin-bottom: 8px; font-size: 13px;
+}
+.um-invite-step-num {
+  width: 24px; height: 24px; border-radius: 50%;
+  background: var(--gold-muted); border: 1px solid var(--border-2);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; color: var(--gold); flex-shrink: 0;
+}
+
+/* Status dot on card */
+.um-status-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.um-status-dot.active   { background: var(--green); }
+.um-status-dot.inactive { background: var(--ink-3); }
+
+@media (max-width: 640px) {
+  .hub-nav { padding: 0 12px; overflow-x: auto; scrollbar-width: none; }
+  .hub-nav::-webkit-scrollbar { display: none; }
+  .um-grid { grid-template-columns: 1fr; }
+  .um-stats { flex-wrap: wrap; }
+  .um-stat  { flex: 1 1 45%; border-bottom: 1px solid var(--border); }
+  .um-toolbar { gap: 8px; }
+  .um-filter-tabs { overflow-x: auto; flex-wrap: nowrap; }
+}
 </style>
 </head>
 <body>
@@ -1175,7 +1419,9 @@ tbody tr:nth-child(n+6){ animation-delay: 100ms;}
     <div class="topbar-row1">
       <a class="logo" onclick="goHub();return false" href="#" aria-label="Home">
         <span class="logo-ball">🎱</span>
-        <span class="logo-text">MAX<span style="color:var(--gold-lt)">147</span></span>
+        <span class="logo-wordmark">
+          <span class="max">MAX</span><span class="num">147</span>
+        </span>
         <span class="sub" id="logo-sub">League Manager</span>
       </a>
       <div class="logo-sep" id="breadcrumb-sep" style="display:none"></div>
@@ -1202,8 +1448,18 @@ tbody tr:nth-child(n+6){ animation-delay: 100ms;}
   <!-- View-only / auth status banner -->
   <div id="auth-banner" style="display:none"></div>
 
-  <!-- Mobile bottom navigation (shown only on small screens) -->
-  <div class="bottom-nav" id="bottom-nav" style="display:none">
+  <!-- Hub-level nav (Competitions / User Management) — only shown on hub view -->
+  <div class="hub-nav" id="hub-nav" style="display:none">
+    <button class="hub-nav-btn active" id="hnb-competitions" onclick="switchHubView('hub')">
+      🎱 My Competitions
+    </button>
+    <button class="hub-nav-btn" id="hnb-users" onclick="switchHubView('users')">
+      👥 User Management
+    </button>
+  </div>
+
+  <!-- Mobile bottom navigation (CSS controls visibility: hidden on desktop, shown on mobile) -->
+  <div class="bottom-nav" id="bottom-nav">
     <div class="bottom-nav-inner">
       <button class="bnav-btn active" onclick="nav('dashboard')" id="bnb-dashboard">
         <span class="bnav-icon">📊</span>
@@ -1272,12 +1528,14 @@ let liveUnsubs = []; // realtime listener unsubscribers
 // ── APP STATE ──────────────────────────────────────────────
 // Two-level: hub (league list) and league (active league context)
 const APP = {
-  view: 'hub',          // 'hub' | 'league'
+  view: 'hub',          // 'hub' | 'league' | 'users'
   tab: 'dashboard',
   dashTab: 'standings',
   sortCol: 'pts', sortDir: -1,
   openTeams: {},
   hubFilter: { active:true, draft:true, closed:false },
+  umFilter: 'all',   // user management role filter: 'all'|'super_admin'|'competition_owner'|'player'
+  umSearch: '',      // user management search string
   gsPhase: 'groups',  // group_stage phase: 'groups' | 'knockout'
 
   // Auth state — populated by onAuthStateChanged
@@ -1684,13 +1942,12 @@ function updateAuthChrome() {
     if (adminBtn) adminBtn.style.display = isSuperAdmin() ? '' : 'none';
     if (banner) banner.style.display = 'none';
   } else {
-    // View-only chip
+    // View-only: show Sign in button in topbar only (not in banner)
     chipArea.innerHTML = `<button class="btn btn-ghost btn-sm" onclick="showAuthScreen()">Sign in</button>`;
     if (banner) {
       banner.style.display = '';
       banner.innerHTML = `<div class="auth-view-only">
         <div class="auth-view-only-msg"><span class="icon">👁</span> Viewing as guest — sign in to manage competitions or enter scores</div>
-        <button class="btn btn-primary btn-sm" onclick="showAuthScreen()">Sign in</button>
       </div>`;
     }
   }
@@ -1741,19 +1998,23 @@ function renderAuthCard() {
     <div class="auth-providers">
       <button class="auth-provider-btn" onclick="signInWithProvider('google')">
         <div class="auth-provider-icon"><svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg></div>
-        Continue with Google
+        <span class="provider-name">Continue with Google</span>
+        <span class="provider-arrow">→</span>
       </button>
       <button class="auth-provider-btn" onclick="signInWithProvider('apple')">
         <div class="auth-provider-icon"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701z"/></svg></div>
-        Continue with Apple
+        <span class="provider-name">Continue with Apple</span>
+        <span class="provider-arrow">→</span>
       </button>
       <button class="auth-provider-btn" onclick="signInWithProvider('microsoft')">
         <div class="auth-provider-icon"><svg viewBox="0 0 24 24" fill="none"><rect x="1" y="1" width="10.5" height="10.5" fill="#F25022"/><rect x="12.5" y="1" width="10.5" height="10.5" fill="#7FBA00"/><rect x="1" y="12.5" width="10.5" height="10.5" fill="#00A4EF"/><rect x="12.5" y="12.5" width="10.5" height="10.5" fill="#FFB900"/></svg></div>
-        Continue with Microsoft
+        <span class="provider-name">Continue with Microsoft</span>
+        <span class="provider-arrow">→</span>
       </button>
       <button class="auth-provider-btn" onclick="signInWithProvider('facebook')">
         <div class="auth-provider-icon"><svg viewBox="0 0 24 24" fill="#1877F2"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg></div>
-        Continue with Facebook
+        <span class="provider-name">Continue with Facebook</span>
+        <span class="provider-arrow">→</span>
       </button>
     </div>
 
@@ -1919,6 +2180,12 @@ async function saveProfile() {
 async function openAdminPanel() {
   document.getElementById('user-menu').style.display = 'none';
   if (!isSuperAdmin()) { toast('Access denied'); return; }
+  // Navigate to the dedicated User Management page
+  APP.view = 'users';
+  loadAllUsers(true);
+  render();
+  return; // keep the modal as fallback below (unreachable but safe)
+
 
   openModal('Admin panel',
     `<div style="color:var(--ink-2);font-size:13px;margin-bottom:14px">Loading users…</div>`,
@@ -2217,9 +2484,9 @@ function showLeagueChrome(lgName, isKnockout) {
   const mainNav = document.getElementById('main-nav');
   if (mainNav) mainNav.style.display = 'flex';
 
-  // Bottom nav (mobile)
+  // Bottom nav (mobile only — CSS controls visibility, JS just manages content)
   const bottomNav = document.getElementById('bottom-nav');
-  if (bottomNav) bottomNav.style.display = 'block';
+  if (bottomNav) bottomNav.removeAttribute('style'); // let CSS media query decide
 
   // Fixtures tab: hide for knockout
   const nbFix = document.getElementById('nb-fixtures');
@@ -2242,8 +2509,12 @@ function hideLeagueChrome() {
   ids.forEach(id => { const el=document.getElementById(id); if(el) el.style.display='none'; });
   const sep = document.getElementById('breadcrumb-sep');
   if (sep) sep.style.display = 'none';
-  const bottomNav = document.getElementById('bottom-nav');
-  if (bottomNav) bottomNav.style.display = 'none';
+  // bottom-nav visibility is controlled entirely by CSS media query
+}
+
+function switchHubView(view) {
+  APP.view = view;
+  render();
 }
 
 function goHub() {
@@ -2361,7 +2632,19 @@ function generateRoundRobin() {
 // ── RENDER ────────────────────────────────────────────────
 function render() {
   const main=document.getElementById('main');
-  if(APP.view==='hub') { main.innerHTML=renderHub(); return; }
+  // Show hub-nav only on hub/users view
+  const hubNav = document.getElementById('hub-nav');
+  if (hubNav) {
+    hubNav.style.display = (APP.view==='hub'||APP.view==='users') ? 'flex' : 'none';
+    // Only show User Management tab to super admins
+    const unBtn = document.getElementById('hnb-users');
+    if (unBtn) unBtn.style.display = isSuperAdmin() ? 'flex' : 'none';
+    // Sync active tab
+    document.getElementById('hnb-competitions')?.classList.toggle('active', APP.view==='hub');
+    document.getElementById('hnb-users')?.classList.toggle('active', APP.view==='users');
+  }
+  if(APP.view==='hub')   { main.innerHTML=renderHub();   return; }
+  if(APP.view==='users') { main.innerHTML=renderUserManagement(); return; }
   // Tab-level access guard
   const restrictedTabs = ['fixtures','participants','config'];
   if (restrictedTabs.includes(APP.tab) && !canEditCompetition(APP.activeLeagueId)) {
@@ -2414,6 +2697,448 @@ function leagueStats(lg) {
   return {participants:ents.length, matches:seed.matches.length, completed, remaining: seed.matches.length-completed};
 }
 
+
+// ══════════════════════════════════════════════════════════
+// USER MANAGEMENT PAGE
+// ══════════════════════════════════════════════════════════
+
+// In-memory cache of all users (loaded when page opens)
+let _allUsers = [];
+let _usersLoading = false;
+
+async function loadAllUsers(force=false) {
+  if (_usersLoading) return;
+  if (_allUsers.length && !force) { render(); return; }
+  _usersLoading = true;
+  if (!db) { _usersLoading=false; render(); return; }
+  try {
+    const snap = await db.collection('users').orderBy('createdAt','desc').get({ source:'server' });
+    _allUsers = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+  } catch(e) {
+    console.error('loadAllUsers error', e);
+    _allUsers = [];
+  }
+  _usersLoading = false;
+  render();
+}
+
+// ── MAIN RENDERER ──────────────────────────────────────────
+function renderUserManagement() {
+  if (!isSuperAdmin()) {
+    return `<div class="lock-overlay">
+      <div class="lock-icon">🔒</div>
+      <div class="lock-msg">User Management is only accessible to Super Admins.</div>
+    </div>`;
+  }
+
+  // Trigger load if not loaded yet
+  if (!_allUsers.length && !_usersLoading) {
+    loadAllUsers();
+    return `<div style="text-align:center;padding:60px 20px;color:var(--ink-3)">
+      <div class="auth-loading-spinner" style="margin:0 auto 16px"></div>
+      <div style="font-size:13px">Loading users…</div>
+    </div>`;
+  }
+
+  if (_usersLoading) {
+    return `<div style="text-align:center;padding:60px 20px;color:var(--ink-3)">
+      <div class="auth-loading-spinner" style="margin:0 auto 16px"></div>
+      <div style="font-size:13px">Loading users…</div>
+    </div>`;
+  }
+
+  // Filter + search
+  const search = (APP.umSearch||'').toLowerCase();
+  const roleFilter = APP.umFilter || 'all';
+
+  const filtered = _allUsers.filter(u => {
+    if (roleFilter !== 'all' && u.role !== roleFilter) return false;
+    if (search) {
+      const hay = ((u.displayName||'') + ' ' + (u.email||'')).toLowerCase();
+      if (!hay.includes(search)) return false;
+    }
+    return true;
+  });
+
+  // Stats
+  const total  = _allUsers.length;
+  const admins = _allUsers.filter(u=>u.role==='super_admin').length;
+  const owners = _allUsers.filter(u=>u.role==='competition_owner').length;
+  const players= _allUsers.filter(u=>u.role==='player'||!u.role).length;
+
+  const roleLabels = {
+    super_admin: 'Super Admin',
+    competition_owner: 'Owner',
+    player: 'Player'
+  };
+
+  const cards = filtered.map(u => {
+    const initial = (u.displayName||u.email||'?')[0].toUpperCase();
+    const role = u.role || 'player';
+    const roleLabel = roleLabels[role] || role;
+    const joined = u.createdAt ? u.createdAt.slice(0,10) : '—';
+    const isSelf = u.id === APP.auth.uid;
+
+    // Memberships display
+    const memberships = Object.entries(u.memberships||{});
+    const membershipRows = memberships.length
+      ? memberships.map(([lid, mem]) => {
+          const lg = APP.leagues.find(l=>l.id===lid);
+          return `<div class="um-membership-row">
+            <span class="um-membership-name">${lg?lg.name:lid}</span>
+            <span class="um-membership-role">${mem.role}</span>
+          </div>`;
+        }).join('')
+      : `<div class="um-no-memberships">No competition memberships</div>`;
+
+    return `<div class="um-card" id="umc-${u.id}">
+      <div class="um-card-top">
+        <div class="um-avatar">
+          ${u.photoURL
+            ? `<img src="${u.photoURL}" alt="" onerror="this.style.display='none'">`
+            : initial}
+        </div>
+        <div class="um-user-info">
+          <div class="um-user-name">${u.displayName||'—'} ${isSelf?'<span style="font-size:10px;color:var(--gold)">(you)</span>':''}</div>
+          <div class="um-user-email">${u.email||'—'}</div>
+          <div class="um-user-meta">
+            <span class="um-role-pill um-role-${role}">${roleLabel}</span>
+            <span>Joined ${joined}</span>
+          </div>
+        </div>
+      </div>
+      <div class="um-memberships">${membershipRows}</div>
+      <div class="um-card-foot">
+        <button class="btn btn-ghost btn-xs" onclick="openEditUser('${u.id}')">✏️ Edit</button>
+        <button class="btn btn-ghost btn-xs" onclick="openManageMemberships('${u.id}')">🏆 Competitions</button>
+        <div class="spacer"></div>
+        ${!isSelf
+          ? `<button class="btn btn-danger btn-xs" onclick="confirmDeleteUser('${u.id}')">🗑 Remove</button>`
+          : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  return `
+  <div class="um-shell">
+
+    <!-- Header -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
+      <div class="sec-title" style="margin:0">👥 User Management</div>
+      <button class="btn btn-primary btn-sm" onclick="openInviteUser()">+ Invite user</button>
+    </div>
+
+    <!-- Stats -->
+    <div class="um-stats">
+      <div class="um-stat"><div class="um-stat-val">${total}</div><div class="um-stat-lbl">Total users</div></div>
+      <div class="um-stat"><div class="um-stat-val" style="color:var(--gold)">${admins}</div><div class="um-stat-lbl">Super Admins</div></div>
+      <div class="um-stat"><div class="um-stat-val" style="color:var(--blue)">${owners}</div><div class="um-stat-lbl">Owners</div></div>
+      <div class="um-stat"><div class="um-stat-val" style="color:var(--green)">${players}</div><div class="um-stat-lbl">Players</div></div>
+    </div>
+
+    <!-- Toolbar -->
+    <div class="um-toolbar">
+      <div class="um-search">
+        <span class="um-search-icon">🔍</span>
+        <input
+          type="text"
+          placeholder="Search by name or email…"
+          value="${APP.umSearch||''}"
+          oninput="APP.umSearch=this.value;render()"
+          id="um-search-input">
+      </div>
+      <div class="um-filter-tabs">
+        <button class="um-filter-tab ${roleFilter==='all'?'active':''}" onclick="APP.umFilter='all';render()">All</button>
+        <button class="um-filter-tab ${roleFilter==='super_admin'?'active':''}" onclick="APP.umFilter='super_admin';render()">Super Admin</button>
+        <button class="um-filter-tab ${roleFilter==='competition_owner'?'active':''}" onclick="APP.umFilter='competition_owner';render()">Owner</button>
+        <button class="um-filter-tab ${roleFilter==='player'?'active':''}" onclick="APP.umFilter='player';render()">Player</button>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="loadAllUsers(true)">↻ Refresh</button>
+    </div>
+
+    <!-- User grid -->
+    ${filtered.length
+      ? `<div class="um-grid">${cards}</div>`
+      : `<div class="empty">
+          <div class="empty-icon">👥</div>
+          <div class="empty-text">
+            ${search||roleFilter!=='all'
+              ? 'No users match the current filter.'
+              : 'No users yet. Invite someone to get started.'}
+          </div>
+        </div>`
+    }
+  </div>`;
+}
+
+// ── EDIT USER MODAL ────────────────────────────────────────
+function openEditUser(uid) {
+  const u = _allUsers.find(x=>x.id===uid);
+  if (!u) return;
+  const isSelf = uid === APP.auth.uid;
+
+  openModal(`Edit user — ${u.displayName||u.email||uid}`,
+    `<div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+      <div class="um-avatar" style="width:52px;height:52px;font-size:20px">
+        ${u.photoURL
+          ? `<img src="${u.photoURL}" alt="" onerror="this.style.display='none'">`
+          : (u.displayName||'?')[0].toUpperCase()}
+      </div>
+      <div>
+        <div style="font-weight:700;font-size:14px">${u.displayName||'—'}</div>
+        <div style="font-size:12px;color:var(--ink-3)">${u.email||'—'}</div>
+        ${isSelf?'<div style="font-size:11px;color:var(--gold);margin-top:2px">This is your account</div>':''}
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-field">
+        <label>Display name</label>
+        <input id="eu-name" value="${u.displayName||''}" placeholder="Full name">
+      </div>
+    </div>
+
+    <div class="form-field" style="margin-bottom:12px">
+      <label>Role</label>
+      <div class="toggle-group" style="margin-top:5px">
+        <div class="tog ${(u.role||'player')==='super_admin'?'on':''}"
+          onclick="setEditRole('super_admin',this)" ${isSelf?'style="opacity:.5;pointer-events:none"':''}>
+          🛡️ Super Admin
+        </div>
+        <div class="tog ${(u.role||'player')==='competition_owner'?'on':''}"
+          onclick="setEditRole('competition_owner',this)">
+          🏆 Owner
+        </div>
+        <div class="tog ${(u.role||'player')==='player'?'on':''}"
+          onclick="setEditRole('player',this)">
+          🎱 Player
+        </div>
+      </div>
+      ${isSelf?`<div style="font-size:11px;color:var(--ink-3);margin-top:6px">You cannot change your own role.</div>`:''}
+    </div>
+
+    <input type="hidden" id="eu-role" value="${u.role||'player'}">
+
+    <div class="alert alert-info" style="margin-top:4px;font-size:12px">
+      Role changes take effect immediately. The user will see the new role on their next page refresh.
+    </div>`,
+    `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="saveEditUser('${uid}')">Save changes</button>`
+  );
+}
+
+function setEditRole(role, el) {
+  document.getElementById('eu-role').value = role;
+  el.closest('.toggle-group').querySelectorAll('.tog').forEach(t=>t.classList.remove('on'));
+  el.classList.add('on');
+}
+
+async function saveEditUser(uid) {
+  const name = document.getElementById('eu-name').value.trim();
+  const role = document.getElementById('eu-role').value;
+  const isSelf = uid === APP.auth.uid;
+
+  if (!name) { toast('Name is required'); return; }
+  if (!db)   { toast('Firebase not connected'); return; }
+
+  try {
+    const updates = { displayName: name };
+    // Cannot change own role
+    if (!isSelf) updates.role = role;
+    updates.updatedAt = new Date().toISOString();
+
+    await db.collection('users').doc(uid).update(updates);
+
+    // Update local cache
+    const idx = _allUsers.findIndex(u=>u.id===uid);
+    if (idx > -1) Object.assign(_allUsers[idx], updates);
+
+    // If editing self, update APP.auth too
+    if (isSelf) {
+      APP.auth.displayName = name;
+      updateAuthChrome();
+    }
+
+    closeModal();
+    toast('User updated ✓');
+    render();
+  } catch(e) {
+    toast('Update failed: ' + (e.message||e.code));
+  }
+}
+
+// ── MANAGE MEMBERSHIPS MODAL ───────────────────────────────
+async function openManageMemberships(uid) {
+  const u = _allUsers.find(x=>x.id===uid);
+  if (!u) return;
+
+  openModal(`Competitions — ${u.displayName||u.email}`,
+    `<div style="color:var(--ink-2);font-size:13px;margin-bottom:14px">Loading…</div>`,
+    `<button class="btn btn-ghost" onclick="closeModal()">Close</button>`
+  );
+
+  // Load current memberships from Firestore
+  let memberships = {};
+  try {
+    const snap = await db.collectionGroup('members').where('uid','==',uid).get({ source:'server' });
+    snap.forEach(d => {
+      const parts = d.ref.path.split('/');
+      const leagueId = parts[1];
+      memberships[leagueId] = { ...d.data(), _docRef: d.ref };
+    });
+  } catch(e) { console.error(e); }
+
+  // Render
+  const rows = APP.leagues.map(lg => {
+    const mem = memberships[lg.id];
+    const inLeague = !!mem;
+    const memRole = mem?.role || 'player';
+    return `<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(201,168,76,.06)">
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${lg.name}</div>
+        <div style="font-size:11px;color:var(--ink-3)">${lg.season||''} · ${lg.competitionType||'league'}</div>
+      </div>
+      ${inLeague
+        ? `<select style="font-size:12px;padding:4px 6px" id="mem-role-${lg.id}" onchange="updateMembership('${uid}','${lg.id}',this.value)">
+            <option value="player"  ${memRole==='player'?'selected':''}>Player</option>
+            <option value="owner"   ${memRole==='owner'?'selected':''}>Owner</option>
+          </select>
+          <button class="btn btn-danger btn-xs" onclick="removeMembership('${uid}','${lg.id}')">Remove</button>`
+        : `<button class="btn btn-ghost btn-xs" onclick="addMembership('${uid}','${lg.id}')">+ Add</button>`
+      }
+    </div>`;
+  }).join('');
+
+  document.getElementById('modal-body').innerHTML = `
+    <div style="font-size:12px;color:var(--ink-2);margin-bottom:14px">
+      Manage which competitions this user can access and their role within each.
+    </div>
+    <div id="mem-rows">${rows || '<div style="color:var(--ink-3);font-size:13px">No competitions yet.</div>'}</div>`;
+
+  document.getElementById('modal-ft').innerHTML =
+    `<button class="btn btn-ghost" onclick="closeModal()">Done</button>`;
+
+  // Store memberships ref for update functions
+  window._editingMemberships = { uid, memberships };
+}
+
+async function addMembership(uid, leagueId) {
+  if (!db) return;
+  try {
+    const u = _allUsers.find(x=>x.id===uid);
+    const data = { uid, role:'player', displayName: u?.displayName||'', email: u?.email||'' };
+    await db.collection('leagues').doc(leagueId).collection('members').doc(uid).set(data);
+    toast('Added to competition ✓');
+    await openManageMemberships(uid);
+    loadAllUsers(true);
+  } catch(e) { toast('Failed: ' + e.message); }
+}
+
+async function removeMembership(uid, leagueId) {
+  if (!confirm('Remove this user from the competition?')) return;
+  if (!db) return;
+  try {
+    await db.collection('leagues').doc(leagueId).collection('members').doc(uid).delete();
+    toast('Removed from competition ✓');
+    await openManageMemberships(uid);
+    loadAllUsers(true);
+  } catch(e) { toast('Failed: ' + e.message); }
+}
+
+async function updateMembership(uid, leagueId, role) {
+  if (!db) return;
+  try {
+    await db.collection('leagues').doc(leagueId).collection('members').doc(uid).update({ role });
+    toast('Role updated ✓');
+  } catch(e) { toast('Failed: ' + e.message); }
+}
+
+// ── INVITE USER MODAL ──────────────────────────────────────
+function openInviteUser() {
+  openModal('Invite user',
+    `<div class="um-invite-step">
+      <div class="um-invite-step-num">1</div>
+      <div>Share the app URL with the person you want to invite.</div>
+    </div>
+    <div class="um-invite-step">
+      <div class="um-invite-step-num">2</div>
+      <div>They sign in using Google, Apple, Microsoft, Facebook, or email link.</div>
+    </div>
+    <div class="um-invite-step">
+      <div class="um-invite-step-num">3</div>
+      <div>Their account is created automatically with the <strong>Player</strong> role.</div>
+    </div>
+    <div class="um-invite-step">
+      <div class="um-invite-step-num">4</div>
+      <div>Come back here and change their role or add them to competitions.</div>
+    </div>
+
+    <div style="margin-top:18px">
+      <div class="form-field" style="margin-bottom:12px">
+        <label>App URL (share this link)</label>
+        <div style="display:flex;gap:8px">
+          <input id="inv-url" value="${window.location.href.split('?')[0]}" readonly style="color:var(--ink-2)">
+          <button class="btn btn-ghost btn-sm" onclick="copyInviteUrl()" style="white-space:nowrap">Copy</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="alert alert-info" style="margin-top:4px">
+      After they sign in, refresh this page (↻ Refresh button) to see their account appear.
+    </div>`,
+    `<button class="btn btn-ghost" onclick="closeModal()">Close</button>`
+  );
+}
+
+function copyInviteUrl() {
+  const url = document.getElementById('inv-url').value;
+  navigator.clipboard.writeText(url)
+    .then(() => toast('URL copied to clipboard ✓'))
+    .catch(() => toast('Copy failed — select the URL manually'));
+}
+
+// ── DELETE USER ────────────────────────────────────────────
+function confirmDeleteUser(uid) {
+  const u = _allUsers.find(x=>x.id===uid);
+  if (!u) return;
+
+  openModal('Remove user',
+    `<div class="alert alert-warn" style="margin-bottom:16px">
+      This removes the user's profile and all their competition memberships from Firestore.
+      It does <strong>not</strong> delete their Firebase Auth account — they can still sign in
+      but will be treated as a new user.
+    </div>
+    <div style="font-size:13px;margin-bottom:6px">You are about to remove:</div>
+    <div style="background:var(--bg-raised);border-radius:var(--r);padding:12px 14px;font-size:13px">
+      <div style="font-weight:700">${u.displayName||'—'}</div>
+      <div style="color:var(--ink-3);font-size:12px">${u.email||''}</div>
+      <div style="margin-top:4px"><span class="um-role-pill um-role-${u.role||'player'}">${u.role||'player'}</span></div>
+    </div>`,
+    `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-danger" onclick="deleteUser('${uid}')">Remove user</button>`
+  );
+}
+
+async function deleteUser(uid) {
+  if (!db) return;
+  try {
+    // Delete all memberships
+    const snap = await db.collectionGroup('members').where('uid','==',uid).get();
+    await Promise.all(snap.docs.map(d => d.ref.delete()));
+    // Delete user profile doc
+    await db.collection('users').doc(uid).delete();
+    // Remove from local cache
+    _allUsers = _allUsers.filter(u => u.id !== uid);
+    closeModal();
+    toast('User removed ✓');
+    render();
+  } catch(e) {
+    toast('Delete failed: ' + (e.message||e.code));
+  }
+}
+
+
+
 function toggleHubFilter(key) {
   APP.hubFilter[key] = !APP.hubFilter[key];
   render();
@@ -2447,7 +3172,7 @@ function renderHub() {
     const typeBadge   = `<span class="badge badge-${ct}">${ctIcon} ${ctLabel}</span>`;
     const formatBadge = `<span class="badge badge-${lg.format}">${lg.format}</span>`;
     return `
-    <div class="league-card" onclick="openLeague('${lg.id}')" style="${isClosed?'opacity:.72':''}">
+    <div class="league-card" data-ct="${ct}" onclick="openLeague('${lg.id}')" style="${isClosed?'opacity:.72':''}">
       <div class="lc-top">
         <div>
           <div class="lc-name">${lg.name}</div>
