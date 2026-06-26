@@ -1838,6 +1838,14 @@ function canEditCompetition(leagueId) {
   return mem && mem.role === 'owner';
 }
 
+// Is this user an enrolled member of the competition (player or owner)?
+function isLeagueMember(leagueId) {
+  if (!leagueId) return false;
+  if (isSuperAdmin()) return true;
+  const mem = APP.auth.memberships[leagueId];
+  return !!(mem && mem.role);  // any membership role qualifies
+}
+
 // Can user enter scores for a match (is one of the players in it)?
 function canEnterScore(matchEntityA, matchEntityB) {
   if (isSuperAdmin() || canEditCompetition(APP.activeLeagueId)) return true;
@@ -1867,6 +1875,12 @@ function initAuth() {
     hideAuthLoading();
     updateAuthChrome();
     render();
+    // If inside a league, re-evaluate tab visibility after auth resolves
+    if (APP.view === 'league' && APP.activeLeagueId) {
+      const ct = APP.config.competitionType||'league';
+      const isKnockout = ct==='single_elim'||ct==='double_elim'||ct==='group_stage';
+      updateNavTabVisibility(isKnockout);
+    }
   });
 }
 
@@ -1930,7 +1944,7 @@ function updateAuthChrome() {
     const roleLabel = {super_admin:'Super Admin',competition_owner:'Owner',player:'Player',public:'Public'}[APP.auth.role]||'Player';
     chipArea.innerHTML = `<div class="user-chip" onclick="toggleUserMenu()" id="user-chip">
       <div class="user-avatar">${APP.auth.photoURL?`<img src="${APP.auth.photoURL}" alt="">`:initial}</div>
-      <span class="user-name">${APP.auth.displayName||''}</span>
+      <span class="user-name">${esc(APP.auth.displayName)||''}</span>
     </div>`;
     // Populate menu
     document.getElementById('um-name').textContent  = APP.auth.displayName || '';
@@ -2149,8 +2163,8 @@ function openProfileModal() {
       <div class="user-avatar" style="width:60px;height:60px;font-size:22px;margin:0 auto 10px">
         ${APP.auth.photoURL?`<img src="${APP.auth.photoURL}" alt="">`:((APP.auth.displayName||'?')[0].toUpperCase())}
       </div>
-      <div style="font-size:16px;font-weight:700;color:var(--ink)">${APP.auth.displayName||''}</div>
-      <div style="font-size:12px;color:var(--ink-3);margin-top:2px">${APP.auth.email||''}</div>
+      <div style="font-size:16px;font-weight:700;color:var(--ink)">${esc(APP.auth.displayName)||''}</div>
+      <div style="font-size:12px;color:var(--ink-3);margin-top:2px">${esc(APP.auth.email)||''}</div>
       <div class="badge badge-completed" style="margin-top:8px;display:inline-flex">${roleLabel}</div>
     </div>
     <div class="form-field">
@@ -2202,8 +2216,8 @@ async function openAdminPanel() {
     const rows = users.map(u=>`
       <div class="user-table-row">
         <div>
-          <div style="font-weight:600;font-size:13px">${u.displayName||'—'}</div>
-          <div style="font-size:11px;color:var(--ink-3)">${u.email||''}</div>
+          <div style="font-weight:600;font-size:13px">${esc(u.displayName)||'—'}</div>
+          <div style="font-size:11px;color:var(--ink-3)">${esc(u.email)||''}</div>
         </div>
         <div style="font-size:12px;color:var(--ink-2)">
           ${Object.entries(u.memberships||{}).map(([lid,m])=>`<span class="badge badge-${m.role==='owner'?'completed':'scheduled'}" style="margin-right:4px">${lid}: ${m.role}</span>`).join('')||'No competitions'}
@@ -2440,9 +2454,17 @@ async function syncMax147Session(sessionId) {
   } catch(e){return null;}
 }
 
-// ── HELPERS ───────────────────────────────────────────────
-const genId = () => 'x'+Math.random().toString(36).slice(2,9);
-const L = () => APP.leagues.find(l=>l.id===APP.activeLeagueId);
+// ── HTML ESCAPE — always use for user-supplied strings in innerHTML ──
+// Prevents XSS: <script>, onerror=, href=javascript:, etc.
+function esc(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;');
+}
 
 function getName(id) {
   return (APP.players.find(p=>p.id===id)||APP.teams.find(t=>t.id===id)||{name:id}).name;
@@ -2478,22 +2500,49 @@ function showLeagueChrome(lgName, isKnockout) {
 
   // Bottom nav (mobile only — CSS controls visibility, JS just manages content)
   const bottomNav = document.getElementById('bottom-nav');
-  if (bottomNav) bottomNav.removeAttribute('style'); // let CSS media query decide
+  if (bottomNav) bottomNav.removeAttribute('style');
 
-  // Fixtures tab: hide for knockout
-  const nbFix = document.getElementById('nb-fixtures');
-  const bnbFix = document.getElementById('bnb-fixtures');
-  const fixDisplay = isKnockout ? 'none' : 'flex';
-  if (nbFix) nbFix.style.display = fixDisplay;
-  if (bnbFix) bnbFix.style.display = isKnockout ? 'none' : 'flex';
-
-  // Dashboard label changes for knockout
-  const dashLabel = isKnockout ? '🏆 Bracket' : '📊 Leaderboard';
-  const dashLabelShort = isKnockout ? 'Bracket' : 'Board';
+  // Dashboard label for knockout/group types
+  const dashLabel      = isKnockout ? '🏆 Bracket' : '📊 Leaderboard';
+  const dashLabelShort = isKnockout ? 'Bracket'    : 'Board';
   const nbDash = document.getElementById('nb-dashboard');
   const bnbDashLbl = document.getElementById('bnb-dashboard-lbl');
-  if (nbDash) nbDash.innerHTML = dashLabel;
+  if (nbDash)     nbDash.innerHTML = dashLabel;
   if (bnbDashLbl) bnbDashLbl.textContent = dashLabelShort;
+
+  // ── Tab visibility by role ──────────────────────────────
+  // Leaderboard + High Breaks: always visible (public)
+  // Fixtures: player, owner, super_admin (NOT guest)
+  // Participants + Config: owner, super_admin only
+  updateNavTabVisibility(isKnockout);
+}
+
+function updateNavTabVisibility(isKnockout) {
+  const lid = APP.activeLeagueId;
+
+  // Can this user see Fixtures?
+  // Players who are members of this league can see it; owners/admins always
+  const canSeeFixtures = isLoggedIn() && !isKnockout && (
+    isLeagueMember(lid) || canEditCompetition(lid)
+  );
+
+  // Can this user see Participants + Config?
+  const canSeeManage = canEditCompetition(lid);
+
+  // Tab pairs: [desktop id, mobile id, visible?]
+  const tabs = [
+    ['nb-fixtures',    'bnb-fixtures',    canSeeFixtures],
+    ['nb-participants','bnb-participants', canSeeManage],
+    ['nb-config',      'bnb-config',      canSeeManage],
+  ];
+
+  tabs.forEach(([desktopId, mobileId, visible]) => {
+    const desktop = document.getElementById(desktopId);
+    const mobile  = document.getElementById(mobileId);
+    const display = visible ? 'flex' : 'none';
+    if (desktop) desktop.style.display = display;
+    if (mobile)  mobile.style.display  = visible ? 'flex' : 'none';
+  });
 }
 
 function hideLeagueChrome() {
@@ -2528,7 +2577,7 @@ async function openLeague(id) {
   const ct2 = lg.competitionType||'league';
   const isKnockout = ct2==='single_elim'||ct2==='double_elim'||ct2==='group_stage';
   showLeagueChrome(lg.name, isKnockout);
-  nav(APP.tab);
+  render(); // render() now handles per-tab visibility internally
 }
 
 function nav(tab) {
@@ -2623,45 +2672,144 @@ function generateRoundRobin() {
 
 // ── RENDER ────────────────────────────────────────────────
 function render() {
-  const main=document.getElementById('main');
-  // Show hub-nav only on hub/users view
+  const main = document.getElementById('main');
+
+  // Hub-level nav visibility
   const hubNav = document.getElementById('hub-nav');
   if (hubNav) {
     hubNav.style.display = (APP.view==='hub'||APP.view==='users') ? 'flex' : 'none';
-    // Only show User Management tab to super admins
     const unBtn = document.getElementById('hnb-users');
     if (unBtn) unBtn.style.display = isSuperAdmin() ? 'flex' : 'none';
-    // Sync active tab
     document.getElementById('hnb-competitions')?.classList.toggle('active', APP.view==='hub');
     document.getElementById('hnb-users')?.classList.toggle('active', APP.view==='users');
   }
-  if(APP.view==='hub')   { main.innerHTML=renderHub();   return; }
-  if(APP.view==='users') { main.innerHTML=renderUserManagement(); return; }
-  // Tab-level access guard
-  const restrictedTabs = ['fixtures','participants','config'];
-  if (restrictedTabs.includes(APP.tab) && !canEditCompetition(APP.activeLeagueId)) {
-    main.innerHTML = `<div class="lock-overlay">
-      <div class="lock-icon">🔒</div>
-      <div class="lock-msg">This section requires Competition Owner access.<br>
-      ${!isLoggedIn()?`<button class="btn btn-primary" onclick="showAuthScreen()" style="margin-top:12px">Sign in</button>`:''}
-      </div></div>`;
+
+  if (APP.view==='hub')   { main.innerHTML=renderHub();            return; }
+  if (APP.view==='users') { main.innerHTML=renderUserManagement(); return; }
+
+  // ── Per-tab access matrix ──────────────────────────────
+  // Always update tab visibility on every render so sign-in/out is reflected
+  const ct          = APP.config.competitionType||'league';
+  const isKnockout  = ct==='single_elim'||ct==='double_elim';
+  const isGroupStage= ct==='group_stage';
+  const lid         = APP.activeLeagueId;
+
+  const canSeeFix    = isLoggedIn() && !isKnockout && (isLeagueMember(lid)||canEditCompetition(lid));
+  const canSeeManage = canEditCompetition(lid);
+
+  // Sync nav tab visibility
+  [['nb-fixtures','bnb-fixtures',canSeeFix],
+   ['nb-participants','bnb-participants',canSeeManage],
+   ['nb-config','bnb-config',canSeeManage]
+  ].forEach(([did,mid,show])=>{
+    const d=document.getElementById(did), m=document.getElementById(mid);
+    if(d) d.style.display = show?'flex':'none';
+    if(m) m.style.display = show?'flex':'none';
+  });
+
+  // ── Redirect if current tab is no longer accessible ────
+  const tabAccess = {
+    dashboard: true,
+    breaks:    true,
+    fixtures:  canSeeFix,
+    participants: canSeeManage,
+    config:    canSeeManage,
+  };
+  if (!tabAccess[APP.tab]) {
+    APP.tab = 'dashboard';
+    // Sync nav active state
+    document.querySelectorAll('.nav-btn,.bnav-btn').forEach(b=>b.classList.remove('active'));
+    document.getElementById('nb-dashboard')?.classList.add('active');
+    document.getElementById('bnb-dashboard')?.classList.add('active');
+  }
+
+  // ── Render content ─────────────────────────────────────
+  if (APP.tab==='dashboard') {
+    if (isKnockout)    main.innerHTML=renderBracket();
+    else if(isGroupStage) main.innerHTML=renderGroupStage();
+    else               main.innerHTML=renderDashboard();
+    if (isKnockout) requestAnimationFrame(()=>drawBracketLines());
     return;
   }
-  const ct = APP.config.competitionType||'league';
-  const isKnockout    = ct==='single_elim'||ct==='double_elim';
-  const isGroupStage  = ct==='group_stage';
-  if(APP.tab==='dashboard') {
-    if(isKnockout)   main.innerHTML=renderBracket();
-    else if(isGroupStage) main.innerHTML=renderGroupStage();
-    else             main.innerHTML=renderDashboard();
+
+  if (APP.tab==='breaks') { main.innerHTML=renderHighBreaks(); return; }
+
+  // Fixtures — logged-in members only
+  if (APP.tab==='fixtures') {
+    if (!isLoggedIn()) {
+      main.innerHTML = renderSignInPrompt(
+        'Sign in to view fixtures',
+        'Players and competition owners can view the full fixture list and enter match scores.',
+        '📅'
+      );
+    } else if (!canSeeFix) {
+      main.innerHTML = renderAccessDenied('You need to be enrolled in this competition to view fixtures.');
+    } else {
+      main.innerHTML = renderFixtures();
+    }
+    return;
   }
-  else if(APP.tab==='breaks')       main.innerHTML=renderHighBreaks();
-  else if(APP.tab==='fixtures')     main.innerHTML=renderFixtures();
-  else if(APP.tab==='participants') main.innerHTML=renderParticipants();
-  else if(APP.tab==='config')       main.innerHTML=renderConfig();
-  if(APP.tab==='dashboard' && isKnockout) {
-    requestAnimationFrame(()=>drawBracketLines());
+
+  // Participants — owners only
+  if (APP.tab==='participants') {
+    if (!isLoggedIn()) {
+      main.innerHTML = renderSignInPrompt(
+        'Sign in to manage participants',
+        'Competition owners can manage players, teams, and rosters.',
+        '👥'
+      );
+    } else if (!canSeeManage) {
+      main.innerHTML = renderAccessDenied("You need to be this competition's owner to manage participants.");
+    } else {
+      main.innerHTML = renderParticipants();
+    }
+    return;
   }
+
+  // Config — owners only
+  if (APP.tab==='config') {
+    if (!isLoggedIn()) {
+      main.innerHTML = renderSignInPrompt(
+        'Sign in to access settings',
+        'Competition owners can configure points, format, and competition settings.',
+        '⚙️'
+      );
+    } else if (!canSeeManage) {
+      main.innerHTML = renderAccessDenied("You need to be this competition's owner to change settings.");
+    } else {
+      main.innerHTML = renderConfig();
+    }
+    return;
+  }
+}
+
+// ── SIGN-IN PROMPT (contextual, not a locked door) ────────
+function renderSignInPrompt(title, message, icon='🔒') {
+  return `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+    padding:64px 24px;text-align:center;gap:16px;max-width:380px;margin:0 auto">
+    <div style="font-size:48px;opacity:.4">${icon}</div>
+    <div style="font-size:18px;font-weight:800;color:var(--ink);letter-spacing:-.02em">${title}</div>
+    <div style="font-size:13px;color:var(--ink-2);line-height:1.6">${message}</div>
+    <button class="btn btn-primary" onclick="showAuthScreen()" style="margin-top:4px;padding:10px 24px">
+      Sign in
+    </button>
+    <button class="btn btn-ghost btn-sm" onclick="nav('dashboard')">
+      ← Back to leaderboard
+    </button>
+  </div>`;
+}
+
+// ── ACCESS DENIED (logged in but wrong role) ──────────────
+function renderAccessDenied(message) {
+  return `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+    padding:64px 24px;text-align:center;gap:14px;max-width:380px;margin:0 auto">
+    <div style="font-size:48px;opacity:.35">🔒</div>
+    <div style="font-size:18px;font-weight:800;color:var(--ink);letter-spacing:-.02em">Access restricted</div>
+    <div style="font-size:13px;color:var(--ink-2);line-height:1.6">${message}</div>
+    <button class="btn btn-ghost btn-sm" onclick="nav('dashboard')" style="margin-top:4px">
+      ← Back to leaderboard
+    </button>
+  </div>`;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -2792,7 +2940,7 @@ function renderUserManagement() {
         </div>
         <div class="um-user-info">
           <div class="um-user-name">${u.displayName||'—'} ${isSelf?'<span style="font-size:10px;color:var(--gold)">(you)</span>':''}</div>
-          <div class="um-user-email">${u.email||'—'}</div>
+          <div class="um-user-email">${esc(u.email)||'—'}</div>
           <div class="um-user-meta">
             <span class="um-role-pill um-role-${role}">${roleLabel}</span>
             <span>Joined ${joined}</span>
@@ -2877,8 +3025,8 @@ function openEditUser(uid) {
           : (u.displayName||'?')[0].toUpperCase()}
       </div>
       <div>
-        <div style="font-weight:700;font-size:14px">${u.displayName||'—'}</div>
-        <div style="font-size:12px;color:var(--ink-3)">${u.email||'—'}</div>
+        <div style="font-weight:700;font-size:14px">${esc(u.displayName)||'—'}</div>
+        <div style="font-size:12px;color:var(--ink-3)">${esc(u.email)||'—'}</div>
         ${isSelf?'<div style="font-size:11px;color:var(--gold);margin-top:2px">This is your account</div>':''}
       </div>
     </div>
@@ -2895,7 +3043,7 @@ function openEditUser(uid) {
       <div class="toggle-group" style="margin-top:5px">
         <div class="tog ${(u.role||'player')==='super_admin'?'on':''}"
           data-role="super_admin"
-          onclick="setEditRole('super_admin',this)" ${isSelf?'style="opacity:.5;pointer-events:none"':''}>
+          onclick="setEditRole('super_admin',this)">
           🛡️ Super Admin
         </div>
         <div class="tog ${(u.role||'player')==='competition_owner'?'on':''}"
@@ -2909,7 +3057,11 @@ function openEditUser(uid) {
           🎱 Player
         </div>
       </div>
-      ${isSelf?`<div style="font-size:11px;color:var(--ink-3);margin-top:6px">You cannot change your own role.</div>`:''}
+      ${isSelf
+        ? `<div style="font-size:11px;color:var(--ink-3);margin-top:6px">
+            You can change your own role, but not if you are the only Super Admin.
+           </div>`
+        : ''}
     </div>
 
     <input type="hidden" id="eu-role" value="${u.role||'player'}">
@@ -2973,14 +3125,13 @@ async function saveEditUser(uid) {
   if (!name) { toast('Name is required'); return; }
   if (!db)   { toast('Firebase not connected'); return; }
 
-  // Guard: cannot remove the last super admin
-  if (!isSelf && wouldRemoveLastSuperAdmin(uid, role)) return;
+  // Guard: cannot remove the last super admin (applies to self too)
+  if (wouldRemoveLastSuperAdmin(uid, role)) return;
 
   try {
-    const updates = { displayName: name };
-    // Cannot change own role
-    if (!isSelf) updates.role = role;
-    updates.updatedAt = new Date().toISOString();
+    const updates = { displayName: name, updatedAt: new Date().toISOString() };
+    // Role can now change for anyone (including self) — guard above handles safety
+    updates.role = role;
 
     await db.collection('users').doc(uid).update(updates);
 
@@ -2988,9 +3139,10 @@ async function saveEditUser(uid) {
     const idx = _allUsers.findIndex(u => u.id === uid);
     if (idx > -1) Object.assign(_allUsers[idx], updates);
 
-    // If editing self, update APP.auth too
+    // If editing self, update APP.auth live
     if (isSelf) {
       APP.auth.displayName = name;
+      APP.auth.role = role;
       updateAuthChrome();
     }
 
@@ -3049,8 +3201,8 @@ async function openManageMemberships(uid) {
     const memRole = mem?.role || 'player';
     return `<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(201,168,76,.06)">
       <div style="flex:1;min-width:0">
-        <div style="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${lg.name}</div>
-        <div style="font-size:11px;color:var(--ink-3)">${lg.season||''} · ${lg.competitionType||'league'}</div>
+        <div style="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(lg.name)}</div>
+        <div style="font-size:11px;color:var(--ink-3)">${esc(lg.season)||''} · ${lg.competitionType||'league'}</div>
       </div>
       ${inLeague
         ? `<select style="font-size:12px;padding:4px 6px" id="mem-role-${lg.id}" onchange="updateMembership('${uid}','${lg.id}',this.value)">
@@ -3164,8 +3316,8 @@ function confirmDeleteUser(uid) {
     </div>
     <div style="font-size:13px;margin-bottom:6px">You are about to remove:</div>
     <div style="background:var(--bg-raised);border-radius:var(--r);padding:12px 14px;font-size:13px">
-      <div style="font-weight:700">${u.displayName||'—'}</div>
-      <div style="color:var(--ink-3);font-size:12px">${u.email||''}</div>
+      <div style="font-weight:700">${esc(u.displayName)||'—'}</div>
+      <div style="color:var(--ink-3);font-size:12px">${esc(u.email)||''}</div>
       <div style="margin-top:4px"><span class="um-role-pill um-role-${u.role||'player'}">${u.role||'player'}</span></div>
     </div>`,
     `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
@@ -3229,10 +3381,10 @@ function renderHub() {
     <div class="league-card" data-ct="${ct}" onclick="openLeague('${lg.id}')" style="${isClosed?'opacity:.72':''}">
       <div class="lc-top">
         <div>
-          <div class="lc-name">${lg.name}</div>
+          <div class="lc-name">${esc(lg.name)}</div>
           <div class="lc-meta">
             <span>📅 ${lg.season||'—'}</span>
-            ${lg.description?`<span style="color:var(--ink-3)">${lg.description}</span>`:''}
+            ${lg.description?`<span style="color:var(--ink-3)">${esc(lg.description)}</span>`:''}
           </div>
         </div>
         <div class="lc-status">
@@ -3325,7 +3477,7 @@ function renderDashboard() {
     const rk=i===0?'r1':i===1?'r2':i===2?'r3':'';
     rows+=`<tr>
       <td><span class="rank-cell ${rk}">${i+1}</span></td>
-      <td class="name-cell">${row.name}</td>
+      <td class="name-cell">${esc(row.name)}</td>
       <td>${row.p}</td>
       <td style="color:var(--green)">${row.w}</td>
       <td style="color:var(--ink-2)">${row.d}</td>
@@ -3345,7 +3497,7 @@ function renderDashboard() {
       const fd=row.fw-row.fl;
       pr+=`<tr>
         <td><span class="rank-cell ${i===0?'r1':i===1?'r2':i===2?'r3':''}">${i+1}</span></td>
-        <td class="name-cell">${row.name}</td>
+        <td class="name-cell">${esc(row.name)}</td>
         <td style="color:var(--ink-2)">${row.team}</td>
         <td>${row.p}</td>
         <td style="color:var(--green)">${row.w}</td>
@@ -3435,7 +3587,7 @@ function renderHighBreaks() {
     rows += `<div class="hb-row">
       <div class="hb-rank ${i===0?'r1':i===1?'r2':i===2?'r3':''}">${i+1}</div>
       <div>
-        <div class="hb-player">${b.playerName}</div>
+        <div class="hb-player">${esc(b.playerName)}</div>
         <div class="hb-meta">${matchVs}${b.frame?' · Frame '+b.frame:''}</div>
       </div>
       <div>
@@ -3448,7 +3600,7 @@ function renderHighBreaks() {
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
         <div class="hb-date">${b.date||'—'}</div>
-        <div style="font-size:10px;color:var(--ink-3)">${b.venue||''}</div>
+        <div style="font-size:10px;color:var(--ink-3)">${esc(b.venue)||''}</div>
         <button class="btn-icon" style="font-size:13px;margin-top:2px" title="Remove" onclick="delBreak('${b.id}')">🗑</button>
       </div>
     </div>`;
@@ -3568,7 +3720,7 @@ function renderFixtures() {
           ${fl?`<span style="font-size:11px;color:var(--ink-3)">${fl} frames logged</span>`:''}
         </div>
         <div class="match-vs-row">
-          <div class="match-names">${aName}<span class="match-vs">vs</span>${bName}</div>
+          <div class="match-names">${esc(aName)}<span class="match-vs">vs</span>${esc(bName)}</div>
           ${hasScore
             ? `<div class="score-row"><div class="score-box">${m.scoreA}</div><span style="color:var(--ink-3)">–</span><div class="score-box">${m.scoreB}</div></div>`
             : `<span style="font-size:12px;color:var(--ink-3)">Not yet played</span>`}
@@ -3741,7 +3893,7 @@ function renderParticipants() {
       const players=APP.players.filter(p=>(team.players||[]).includes(p.id));
       html+=`<div class="team-accordion">
         <div class="acc-hd ${open?'open':''}" onclick="APP.openTeams['${team.id}']=!APP.openTeams['${team.id}'];render()">
-          <div><div class="acc-name">${team.name}</div><div class="acc-meta">📍 ${team.venue||'No venue'} · ${players.length} player${players.length!==1?'s':''}</div></div>
+          <div><div class="acc-name">${esc(team.name)}</div><div class="acc-meta">📍 ${team.venue||'No venue'} · ${players.length} player${players.length!==1?'s':''}</div></div>
           <div style="display:flex;gap:6px;align-items:center">
             <button class="btn btn-ghost btn-xs" onclick="event.stopPropagation();openAddPlayerToTeam('${team.id}')">+ Player</button>
             <button class="btn btn-danger btn-xs" onclick="event.stopPropagation();delTeam('${team.id}')">Remove</button>
@@ -3749,7 +3901,7 @@ function renderParticipants() {
           </div>
         </div>
         <div class="acc-body ${open?'open':''}">
-          ${players.length?players.map(p=>`<div class="player-row"><div><div style="font-weight:500">${p.name}</div><div style="font-size:12px;color:var(--ink-3)">${p.contact||''} ${p.handicap?'· Handicap: '+p.handicap:''}</div></div><button class="btn btn-danger btn-xs" onclick="removeFromTeam('${team.id}','${p.id}')">✕</button></div>`).join(''):
+          ${players.length?players.map(p=>`<div class="player-row"><div><div style="font-weight:500">${esc(p.name)}</div><div style="font-size:12px;color:var(--ink-3)">${esc(p.contact)||''} ${p.handicap?'· Handicap: '+p.handicap:''}</div></div><button class="btn btn-danger btn-xs" onclick="removeFromTeam('${team.id}','${p.id}')">✕</button></div>`).join(''):
           `<div style="color:var(--ink-3);font-size:13px;padding:10px 0">No players. Click "+ Player" to add.</div>`}
           <div style="padding-top:10px"><button class="btn btn-ghost btn-sm" onclick="openAddPlayerToTeam('${team.id}')">+ Add player to team</button></div>
         </div>
@@ -3760,7 +3912,7 @@ function renderParticipants() {
     html+=`<div class="panel" style="padding:0;overflow:hidden"><div class="tbl-wrap"><table>
       <thead><tr><th>#</th><th>Name</th><th>Contact</th><th>Handicap</th><th></th></tr></thead><tbody>`;
     APP.players.forEach((p,i)=>{
-      html+=`<tr><td style="color:var(--ink-3)">${i+1}</td><td class="name-cell">${p.name}</td><td style="color:var(--ink-2)">${p.contact||'—'}</td><td>${p.handicap||0}</td>
+      html+=`<tr><td style="color:var(--ink-3)">${i+1}</td><td class="name-cell">${esc(p.name)}</td><td style="color:var(--ink-2)">${esc(p.contact)||'—'}</td><td>${p.handicap||0}</td>
         <td><button class="btn btn-danger btn-xs" onclick="delPlayer('${p.id}')">Remove</button></td></tr>`;
     });
     html+=`</tbody></table></div></div>`;
@@ -3995,7 +4147,7 @@ function renderGroupsPhase(qualifiers, gsComplete, q) {
       const isQ = i < q;
       return `<div class="gs-standings-row ${isQ?'qualified':''}">
         <div class="gs-pos ${isQ?'q':''}">${i+1}</div>
-        <div class="gs-pname">${row.name}</div>
+        <div class="gs-pname">${esc(row.name)}</div>
         <div class="gs-num">${row.p}</div>
         <div class="gs-num">${row.w}</div>
         <div class="gs-num">${row.d}</div>
@@ -4006,7 +4158,7 @@ function renderGroupsPhase(qualifiers, gsComplete, q) {
 
     return `<div class="gs-group-card">
       <div class="gs-group-hd">
-        <div class="gs-group-name">${grp.name}</div>
+        <div class="gs-group-name">${esc(grp.name)}</div>
         <div class="gs-group-status">${done?'✓ Complete':`${played}/${matches.length} played`}</div>
       </div>
       <div class="gs-standings-hd">
@@ -4045,7 +4197,7 @@ function renderGroupsPhase(qualifiers, gsComplete, q) {
       const isDone = m.status==='completed';
       return `<div class="gs-match-row ${isLive?'live':''}" onclick="openGroupMatchScore('${m.id}')">
         <div>
-          <div class="gs-match-names">${aShort}<span class="gs-vs">vs</span>${bShort}</div>
+          <div class="gs-match-names">${esc(aShort)}<span class="gs-vs">vs</span>${esc(bShort)}</div>
           <div class="gs-match-meta">
             <span>${grp?grp.name:''}</span>
             ${m.date?`<span>📅 ${m.date}</span>`:''}
@@ -4293,8 +4445,8 @@ function previewGroupSetup() {
   if (preview) {
     preview.innerHTML = groups.map(g=>`
       <div style="background:var(--bg-raised);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px">
-        <div style="font-size:11px;font-weight:700;color:var(--gold);margin-bottom:6px">${g.name}</div>
-        ${g.players.map(p=>`<div style="font-size:12px;padding:3px 0;border-bottom:1px solid rgba(201,168,76,.05)">${p.name}</div>`).join('')}
+        <div style="font-size:11px;font-weight:700;color:var(--gold);margin-bottom:6px">${esc(g.name)}</div>
+        ${g.players.map(p=>`<div style="font-size:12px;padding:3px 0;border-bottom:1px solid rgba(201,168,76,.05)">${esc(p.name)}</div>`).join('')}
       </div>`).join('');
   }
 }
@@ -4412,11 +4564,11 @@ function renderBracketMatch(m, opts={}) {
 
   return `<div class="${cls}" id="bm-${m.id}" data-round="${m.round}" data-idx="${m.matchIndex}" data-slot="${m.slot||'W'}" ${clickHandler} title="${aFull} vs ${bFull}">
     <div class="${aPlayerCls}">
-      <span class="bp-name">${aName}</span>
+      <span class="bp-name">${esc(aName)}</span>
       <span class="${aScoreCls}">${done||live?m.scoreA:''}</span>
     </div>
     <div class="${bPlayerCls}">
-      <span class="bp-name">${bName}</span>
+      <span class="bp-name">${esc(bName)}</span>
       <span class="${bScoreCls}">${done||live?m.scoreB:''}</span>
     </div>
   </div>`;
@@ -4880,7 +5032,7 @@ function openSeedBracket() {
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px">
       ${shuffled.map((p,i)=>`<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--bg-raised);border-radius:var(--r);font-size:13px">
         <span style="color:var(--ink-3);font-family:monospace;font-size:11px;min-width:20px">${i+1}</span>
-        <span style="font-weight:${p.id==='BYE'?400:500};color:${p.id==='BYE'?'var(--ink-3)':'var(--ink)'}">${p.name}</span>
+        <span style="font-weight:${p.id==='BYE'?400:500};color:${p.id==='BYE'?'var(--ink-3)':'var(--ink)'}">${esc(p.name)}</span>
       </div>`).join('')}
     </div>`,
     `<button class="btn btn-ghost" onclick="openSeedBracket()">🎲 Reseed</button>
@@ -5194,7 +5346,7 @@ function openAddPlayerToTeam(teamId){
   const avail=APP.players.filter(p=>!(team.players||[]).includes(p.id));
   openModal(`Add player to ${team.name}`,
     `${avail.length?`<div class="form-field" style="margin-bottom:14px"><label>Existing player</label>
-      <select id="mp-existing"><option value="">— Select —</option>${avail.map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select></div>`:''}
+      <select id="mp-existing"><option value="">— Select —</option>${avail.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></div>`:''}
     <div class="alert alert-info">Or create new:</div>
     <div class="form-row"><div class="form-field"><label>Name *</label><input id="np-name" placeholder="Player name"></div></div>
     <div class="form-row c2">
@@ -5288,8 +5440,8 @@ function openScoreEntry(matchId){
     return `<div style="display:grid;grid-template-columns:36px 1fr 1fr 1fr 1fr 1fr;gap:6px;padding:6px 10px;border-top:1px solid rgba(201,168,76,.05);font-size:12px;align-items:center">
       <div style="color:var(--ink-3)">F${i+1}</div>
       <select id="fd-w-${i}" style="font-size:12px;padding:4px"><option value="">—</option><option value="A" ${fd.winnerA===true?'selected':''}>A wins</option><option value="B" ${fd.winnerA===false&&fd.winnerA!==undefined?'selected':''}>B wins</option></select>
-      ${isTeam?`<select id="fd-pa-${i}" style="font-size:12px;padding:4px"><option value="">A player</option>${pA.map(p=>`<option value="${p.id}" ${fd.playerA===p.id?'selected':''}>${p.name}</option>`).join('')}</select>
-      <select id="fd-pb-${i}" style="font-size:12px;padding:4px"><option value="">B player</option>${pB.map(p=>`<option value="${p.id}" ${fd.playerB===p.id?'selected':''}>${p.name}</option>`).join('')}</select>`
+      ${isTeam?`<select id="fd-pa-${i}" style="font-size:12px;padding:4px"><option value="">A player</option>${pA.map(p=>`<option value="${p.id}" ${fd.playerA===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}</select>
+      <select id="fd-pb-${i}" style="font-size:12px;padding:4px"><option value="">B player</option>${pB.map(p=>`<option value="${p.id}" ${fd.playerB===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}</select>`
       :`<div></div><div></div>`}
       <input type="number" id="fd-ba-${i}" placeholder="Brk A" value="${fd.breakA||''}" min="0" max="147" style="font-size:12px;padding:4px">
       <input type="number" id="fd-bb-${i}" placeholder="Brk B" value="${fd.breakB||''}" min="0" max="147" style="font-size:12px;padding:4px">
@@ -5355,7 +5507,7 @@ function openFrameLog(matchId){
   openModal(`Frame log — ${aName} vs ${bName}`,
     `<div style="background:var(--bg-mid);border-radius:var(--r);overflow:hidden">
       <div style="display:grid;grid-template-columns:36px 1fr 1fr 70px 70px;gap:8px;padding:7px 12px;background:var(--bg);font-size:10px;font-weight:600;color:var(--ink-3);text-transform:uppercase">
-        <div>#</div><div>${aName}</div><div>${bName}</div><div>Brk A</div><div>Brk B</div>
+        <div>#</div><div>${esc(aName)}</div><div>${esc(bName)}</div><div>Brk A</div><div>Brk B</div>
       </div>${rows}</div>
     <div style="margin-top:14px;font-size:13px;color:var(--ink-2)">Final: <strong style="color:var(--ink)">${m.scoreA} – ${m.scoreB}</strong> &nbsp;·&nbsp; High breaks: <strong style="color:var(--gold)">${m.highBreakA}</strong> / <strong style="color:var(--gold)">${m.highBreakB}</strong></div>`,
     `<button class="btn btn-ghost" onclick="closeModal()">Close</button>`
@@ -5451,7 +5603,7 @@ function openAddBreak() {
     `<div class="alert alert-info" style="margin-bottom:14px">Breaks ≥ the threshold (${APP.config.highBreakThreshold??50}) are logged automatically from frame scores. Use this to add one manually.</div>
     <div class="form-row c2">
       <div class="form-field"><label>Player *</label>
-        <select id="ab-player"><option value="">— Select —</option>${playerList.map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}</select>
+        <select id="ab-player"><option value="">— Select —</option>${playerList.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>
       </div>
       <div class="form-field"><label>Break score *</label>
         <input id="ab-score" type="number" min="1" max="147" placeholder="e.g. 127" autofocus>
