@@ -2498,7 +2498,7 @@ function showLeagueChrome(lgName, isKnockout) {
   const mainNav = document.getElementById('main-nav');
   if (mainNav) mainNav.style.display = 'flex';
 
-  // Bottom nav (mobile only — CSS controls visibility, JS just manages content)
+  // Bottom nav (mobile only — CSS controls visibility)
   const bottomNav = document.getElementById('bottom-nav');
   if (bottomNav) bottomNav.removeAttribute('style');
 
@@ -2510,38 +2510,23 @@ function showLeagueChrome(lgName, isKnockout) {
   if (nbDash)     nbDash.innerHTML = dashLabel;
   if (bnbDashLbl) bnbDashLbl.textContent = dashLabelShort;
 
-  // ── Tab visibility by role ──────────────────────────────
-  // Leaderboard + High Breaks: always visible (public)
-  // Fixtures: player, owner, super_admin (NOT guest)
-  // Participants + Config: owner, super_admin only
-  updateNavTabVisibility(isKnockout);
+  // Tab visibility is computed in render() after auth resolves — not here
 }
 
 function updateNavTabVisibility(isKnockout) {
   const lid = APP.activeLeagueId;
+  if (APP.auth.loading) return; // don't update until auth is confirmed
 
-  // Can this user see Fixtures?
-  // Players who are members of this league can see it; owners/admins always
-  const canSeeFixtures = isLoggedIn() && !isKnockout && (
-    isLeagueMember(lid) || canEditCompetition(lid)
-  );
-
-  // Can this user see Participants + Config?
+  const canSeeFix    = isLoggedIn() && !isKnockout && (isLeagueMember(lid) || canEditCompetition(lid));
   const canSeeManage = canEditCompetition(lid);
 
-  // Tab pairs: [desktop id, mobile id, visible?]
-  const tabs = [
-    ['nb-fixtures',    'bnb-fixtures',    canSeeFixtures],
-    ['nb-participants','bnb-participants', canSeeManage],
-    ['nb-config',      'bnb-config',      canSeeManage],
-  ];
-
-  tabs.forEach(([desktopId, mobileId, visible]) => {
-    const desktop = document.getElementById(desktopId);
-    const mobile  = document.getElementById(mobileId);
-    const display = visible ? 'flex' : 'none';
-    if (desktop) desktop.style.display = display;
-    if (mobile)  mobile.style.display  = visible ? 'flex' : 'none';
+  [['nb-fixtures',     'bnb-fixtures',    canSeeFix   ],
+   ['nb-participants', 'bnb-participants', canSeeManage],
+   ['nb-config',       'bnb-config',      canSeeManage],
+  ].forEach(([did, mid, show]) => {
+    const d = document.getElementById(did), m = document.getElementById(mid);
+    if (d) d.style.display = show ? 'flex' : 'none';
+    if (m) m.style.display = show ? 'flex' : 'none';
   });
 }
 
@@ -2694,17 +2679,30 @@ function render() {
   const isGroupStage= ct==='group_stage';
   const lid         = APP.activeLeagueId;
 
-  const canSeeFix    = isLoggedIn() && !isKnockout && (isLeagueMember(lid)||canEditCompetition(lid));
-  const canSeeManage = canEditCompetition(lid);
+  // While auth is still loading, show only public tabs to avoid flicker
+  // hiding tabs that should be visible once auth resolves
+  if (APP.auth.loading) {
+    ['nb-fixtures','bnb-fixtures','nb-participants','bnb-participants','nb-config','bnb-config']
+      .forEach(id => { const el=document.getElementById(id); if(el) el.style.display='none'; });
+    main.innerHTML = `<div style="text-align:center;padding:60px 20px;color:var(--ink-3)">
+      <div class="auth-loading-spinner" style="margin:0 auto 16px"></div>
+      <div style="font-size:13px">Loading…</div>
+    </div>`;
+    return;
+  }
+
+  // Recompute after auth is confirmed loaded
+  const canSeeFix    = isLoggedIn() && !isKnockout && (isLeagueMember(lid) || canEditCompetition(lid));
+  const canSeeManage = canEditCompetition(lid); // true for super_admin and owners
 
   // Sync nav tab visibility
-  [['nb-fixtures','bnb-fixtures',canSeeFix],
-   ['nb-participants','bnb-participants',canSeeManage],
-   ['nb-config','bnb-config',canSeeManage]
-  ].forEach(([did,mid,show])=>{
-    const d=document.getElementById(did), m=document.getElementById(mid);
-    if(d) d.style.display = show?'flex':'none';
-    if(m) m.style.display = show?'flex':'none';
+  [['nb-fixtures',     'bnb-fixtures',    canSeeFix   ],
+   ['nb-participants', 'bnb-participants', canSeeManage],
+   ['nb-config',       'bnb-config',      canSeeManage],
+  ].forEach(([did, mid, show]) => {
+    const d = document.getElementById(did), m = document.getElementById(mid);
+    if (d) d.style.display = show ? 'flex' : 'none';
+    if (m) m.style.display = show ? 'flex' : 'none';
   });
 
   // ── Redirect if current tab is no longer accessible ────
