@@ -1803,19 +1803,32 @@ async function sendOTP() {
   const email = emailEl ? emailEl.value.trim() : '';
   if (!email || !email.includes('@')) { toast('Enter a valid email'); return; }
   if (!auth) { toast('Firebase not connected'); return; }
+
+  // Throttle — prevent sending more than once per 60 seconds
+  const lastSent = +localStorage.getItem('otpLastSent_' + email) || 0;
+  const secondsSince = (Date.now() - lastSent) / 1000;
+  if (secondsSince < 60) {
+    toast(`Please wait ${Math.ceil(60 - secondsSince)}s before requesting another code`);
+    return;
+  }
+
   otpEmail = email;
   const actionCodeSettings = {
-    url: 'https://oohneb1980.github.io/Max147LeagueManager/',
+    url: 'https://oohneb1980.github.io/SnookerScoringApp/max147-league-manager.html',
     handleCodeInApp: true,
   };
   try {
     await auth.sendSignInLinkToEmail(email, actionCodeSettings);
-    window.localStorage.setItem('emailForSignIn', email);
+    localStorage.setItem('emailForSignIn', email);
+    localStorage.setItem('otpLastSent_' + email, Date.now());
     authStep = 'otp';
     renderAuthCard();
     toast('Sign-in link sent — check your inbox');
   } catch(e) {
-    toast('Failed to send OTP: ' + (e.message || e.code));
+    const msg = e.code === 'auth/quota-exceeded'
+      ? 'Daily email limit reached — please use Google sign-in or try tomorrow'
+      : 'Failed to send: ' + (e.message || e.code);
+    toast(msg);
   }
 }
 
