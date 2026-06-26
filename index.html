@@ -1163,6 +1163,7 @@ tbody tr:nth-child(n+6){ animation-delay: 100ms;}
     <div class="user-menu-role" id="um-role"></div>
   </div>
   <button class="user-menu-item" onclick="openProfileModal()">👤 My profile</button>
+  <button class="user-menu-item" onclick="refreshProfile()">🔄 Refresh role</button>
   <button class="user-menu-item" id="um-admin-btn" style="display:none" onclick="openAdminPanel()">🛡️ Admin panel</button>
   <div class="user-menu-sep"></div>
   <button class="user-menu-item danger" onclick="signOut()">← Sign out</button>
@@ -1251,10 +1252,12 @@ tbody tr:nth-child(n+6){ animation-delay: 100ms;}
 const FIREBASE_CONFIG = {
   apiKey:            "AIzaSyDW4yJ2aNPahL8OVuG-7v3_jNA0kZ_8ezE",
   authDomain:        "the-baize.firebaseapp.com",
+  databaseURL:       "https://the-baize-default-rtdb.asia-southeast1.firebasedatabase.app",
   projectId:         "the-baize",
   storageBucket:     "the-baize.firebasestorage.app",
-  messagingSenderId: "Y250835651785",
-  appId:             "1:250835651785:web:5b834cabea1cf8dca69118"
+  messagingSenderId: "250835651785",
+  appId:             "1:250835651785:web:5b834cabea1cf8dca69118",
+  measurementId:     "G-20S7D8D540"
 };
 
 // Firestore top-level collection — all leagues live under this
@@ -1612,7 +1615,9 @@ function initAuth() {
 async function loadUserProfile(uid) {
   if (!db) { APP.auth.role='public'; return; }
   try {
-    const snap = await db.collection('users').doc(uid).get();
+    // Force fetch from server — bypasses offline persistence cache
+    // so role changes made in Firebase console are picked up immediately
+    const snap = await db.collection('users').doc(uid).get({ source: 'server' });
     if (snap.exists) {
       const data = snap.data();
       APP.auth.role = data.role || 'player';
@@ -1627,16 +1632,24 @@ async function loadUserProfile(uid) {
       await db.collection('users').doc(uid).set(profile);
       APP.auth.role = 'player';
     }
-    // Load memberships
-    const memSnap = await db.collectionGroup('members').where('uid','==',uid).get();
+    // Load memberships — also force server fetch
+    const memSnap = await db.collectionGroup('members')
+      .where('uid','==',uid)
+      .get({ source: 'server' });
     const mems = {};
     memSnap.forEach(d => {
-      const parts = d.ref.path.split('/'); // leagues/{lid}/members/{uid}
+      const parts = d.ref.path.split('/');
       const leagueId = parts[1];
       mems[leagueId] = d.data();
     });
     APP.auth.memberships = mems;
-  } catch(e) { APP.auth.role = 'player'; }
+  } catch(e) {
+    // If server fetch fails (offline), fall back to cache
+    try {
+      const snap = await db.collection('users').doc(uid).get({ source: 'cache' });
+      if (snap.exists) APP.auth.role = snap.data().role || 'player';
+    } catch(e2) { APP.auth.role = 'player'; }
+  }
 }
 
 // ── UI CHROME ──────────────────────────────────────────────
@@ -1803,32 +1816,19 @@ async function sendOTP() {
   const email = emailEl ? emailEl.value.trim() : '';
   if (!email || !email.includes('@')) { toast('Enter a valid email'); return; }
   if (!auth) { toast('Firebase not connected'); return; }
-
-  // Throttle — prevent sending more than once per 60 seconds
-  const lastSent = +localStorage.getItem('otpLastSent_' + email) || 0;
-  const secondsSince = (Date.now() - lastSent) / 1000;
-  if (secondsSince < 60) {
-    toast(`Please wait ${Math.ceil(60 - secondsSince)}s before requesting another code`);
-    return;
-  }
-
   otpEmail = email;
   const actionCodeSettings = {
-    url: 'https://oohneb1980.github.io/SnookerScoringApp/max147-league-manager.html',
+    url: window.location.href,
     handleCodeInApp: true,
   };
   try {
     await auth.sendSignInLinkToEmail(email, actionCodeSettings);
-    localStorage.setItem('emailForSignIn', email);
-    localStorage.setItem('otpLastSent_' + email, Date.now());
+    window.localStorage.setItem('emailForSignIn', email);
     authStep = 'otp';
     renderAuthCard();
     toast('Sign-in link sent — check your inbox');
   } catch(e) {
-    const msg = e.code === 'auth/quota-exceeded'
-      ? 'Daily email limit reached — please use Google sign-in or try tomorrow'
-      : 'Failed to send: ' + (e.message || e.code);
-    toast(msg);
+    toast('Failed to send OTP: ' + (e.message || e.code));
   }
 }
 
@@ -1859,6 +1859,16 @@ async function handleEmailLink() {
 }
 
 // ── SIGN OUT ───────────────────────────────────────────────
+async function refreshProfile() {
+  document.getElementById('user-menu').style.display = 'none';
+  if (!APP.auth.uid) return;
+  toast('Refreshing…');
+  await loadUserProfile(APP.auth.uid);
+  updateAuthChrome();
+  render();
+  toast('Role refreshed: ' + APP.auth.role);
+}
+
 async function signOut() {
   document.getElementById('user-menu').style.display = 'none';
   await auth.signOut();
@@ -4780,16 +4790,8 @@ function importLeague(event){
 function resetLeague(){if(!confirm('Reset all data for this league?'))return;APP.players=[];APP.teams=[];APP.matches=[];APP.bracketMatches=[];APP.groups=[];APP.groupMatches=[];APP.knockoutMatches=[];APP.breaks=[];saveActiveToLocal();toast('League data reset');render();}
 
 // ── BOOT ─────────────────────────────────────────────────
-// Start auth + Firebase — if Firebase isn't configured, fall to public guest mode
-if (FIREBASE_CONFIG.projectId === 'YOUR_PROJECT_ID') {
-  // Demo mode — no Firebase, go straight to public view
-  APP.auth.loading = false;
-  document.getElementById('auth-loading').style.display = 'none';
-  document.getElementById('app').style.display = '';
-  loadLocal();
-} else {
-  initFirebase();
-}
+// Firebase config is real — initialise normally
+initFirebase();
 </script>
 </body>
 </html>
