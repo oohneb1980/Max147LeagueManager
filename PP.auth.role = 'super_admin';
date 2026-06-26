@@ -4771,7 +4771,6 @@ function resetLeague(){if(!confirm('Reset all data for this league?'))return;APP
 if (FIREBASE_CONFIG.projectId === 'YOUR_PROJECT_ID') {
   // Demo mode — no Firebase, go straight to public view
   APP.auth.loading = false;
-  APP.auth.role = 'super_admin'; // dev convenience — remove for production
   document.getElementById('auth-loading').style.display = 'none';
   document.getElementById('app').style.display = '';
   loadLocal();
