@@ -2227,15 +2227,7 @@ async function openAdminPanel() {
   }
 }
 
-async function changeUserRole(uid, role) {
-  if (!isSuperAdmin() || !db) return;
-  try {
-    await db.collection('users').doc(uid).update({ role });
-    toast(`Role updated to ${role}`);
-  } catch(e) { toast('Failed: ' + e.message); }
-}
-
-// ── COMPETITION MEMBERSHIP ─────────────────────────────────
+// ── MANAGE MEMBERSHIPS MODAL ───────────────────────────────
 // Add current user as owner when creating a competition
 async function claimCompetitionOwnership(leagueId) {
   if (!APP.auth.uid || !db) return;
@@ -2902,14 +2894,17 @@ function openEditUser(uid) {
       <label>Role</label>
       <div class="toggle-group" style="margin-top:5px">
         <div class="tog ${(u.role||'player')==='super_admin'?'on':''}"
+          data-role="super_admin"
           onclick="setEditRole('super_admin',this)" ${isSelf?'style="opacity:.5;pointer-events:none"':''}>
           🛡️ Super Admin
         </div>
         <div class="tog ${(u.role||'player')==='competition_owner'?'on':''}"
+          data-role="competition_owner"
           onclick="setEditRole('competition_owner',this)">
           🏆 Owner
         </div>
         <div class="tog ${(u.role||'player')==='player'?'on':''}"
+          data-role="player"
           onclick="setEditRole('player',this)">
           🎱 Player
         </div>
@@ -2918,6 +2913,7 @@ function openEditUser(uid) {
     </div>
 
     <input type="hidden" id="eu-role" value="${u.role||'player'}">
+    <input type="hidden" id="eu-uid"  value="${uid}">
 
     <div class="alert alert-info" style="margin-top:4px;font-size:12px">
       Role changes take effect immediately. The user will see the new role on their next page refresh.
@@ -2927,9 +2923,45 @@ function openEditUser(uid) {
   );
 }
 
+// ── LAST SUPER ADMIN GUARD ────────────────────────────────
+// Returns true (and shows a toast) if the change would remove the last super admin
+function wouldRemoveLastSuperAdmin(uid, newRole) {
+  if (newRole === 'super_admin') return false; // promoting, not demoting
+  const currentUser = _allUsers.find(u => u.id === uid);
+  if (!currentUser || currentUser.role !== 'super_admin') return false; // not a super admin
+  const superAdminCount = _allUsers.filter(u => u.role === 'super_admin').length;
+  if (superAdminCount <= 1) {
+    openModal('Action not allowed',
+      `<div class="alert alert-err" style="margin-bottom:14px">
+        <strong>${currentUser.displayName||currentUser.email}</strong> is the only Super Admin.
+        You cannot change their role — there must always be at least one Super Admin in the system.
+      </div>
+      <div style="font-size:13px;color:var(--ink-2);line-height:1.6">
+        To proceed, first promote another user to Super Admin, then come back and change this user's role.
+      </div>`,
+      `<button class="btn btn-primary" onclick="closeModal()">OK, understood</button>`
+    );
+    return true;
+  }
+  return false;
+}
+
 function setEditRole(role, el) {
+  const uid = el.closest('[data-uid]')?.dataset.uid
+    || document.getElementById('eu-uid')?.value;
+
+  // Guard: prevent removing the last super admin via the toggle
+  if (uid && wouldRemoveLastSuperAdmin(uid, role)) {
+    // Revert the toggle visual back to super_admin
+    el.closest('.toggle-group').querySelectorAll('.tog').forEach(t => t.classList.remove('on'));
+    const saToggle = [...el.closest('.toggle-group').querySelectorAll('.tog')]
+      .find(t => t.dataset.role === 'super_admin');
+    if (saToggle) saToggle.classList.add('on');
+    return;
+  }
+
   document.getElementById('eu-role').value = role;
-  el.closest('.toggle-group').querySelectorAll('.tog').forEach(t=>t.classList.remove('on'));
+  el.closest('.toggle-group').querySelectorAll('.tog').forEach(t => t.classList.remove('on'));
   el.classList.add('on');
 }
 
@@ -2941,6 +2973,9 @@ async function saveEditUser(uid) {
   if (!name) { toast('Name is required'); return; }
   if (!db)   { toast('Firebase not connected'); return; }
 
+  // Guard: cannot remove the last super admin
+  if (!isSelf && wouldRemoveLastSuperAdmin(uid, role)) return;
+
   try {
     const updates = { displayName: name };
     // Cannot change own role
@@ -2950,7 +2985,7 @@ async function saveEditUser(uid) {
     await db.collection('users').doc(uid).update(updates);
 
     // Update local cache
-    const idx = _allUsers.findIndex(u=>u.id===uid);
+    const idx = _allUsers.findIndex(u => u.id === uid);
     if (idx > -1) Object.assign(_allUsers[idx], updates);
 
     // If editing self, update APP.auth too
@@ -2967,7 +3002,26 @@ async function saveEditUser(uid) {
   }
 }
 
-// ── MANAGE MEMBERSHIPS MODAL ───────────────────────────────
+async function changeUserRole(uid, role) {
+  if (!isSuperAdmin() || !db) return;
+
+  // Guard: cannot remove the last super admin
+  if (wouldRemoveLastSuperAdmin(uid, role)) {
+    // Revert the select back to super_admin
+    const sel = document.querySelector(`select[data-uid="${uid}"]`)
+      || [...document.querySelectorAll('select')].find(s => s.dataset.uid === uid);
+    if (sel) sel.value = 'super_admin';
+    return;
+  }
+
+  try {
+    await db.collection('users').doc(uid).update({ role });
+    // Update local cache so subsequent checks are accurate
+    const idx = _allUsers.findIndex(u => u.id === uid);
+    if (idx > -1) _allUsers[idx].role = role;
+    toast(`Role updated to ${role} ✓`);
+  } catch(e) { toast('Failed: ' + e.message); }
+}
 async function openManageMemberships(uid) {
   const u = _allUsers.find(x=>x.id===uid);
   if (!u) return;
