@@ -1805,7 +1805,7 @@ async function sendOTP() {
   if (!auth) { toast('Firebase not connected'); return; }
   otpEmail = email;
   const actionCodeSettings = {
-    url: window.location.href,
+    url: 'https://oohneb1980.github.io/Max147LeagueManager/',
     handleCodeInApp: true,
   };
   try {
