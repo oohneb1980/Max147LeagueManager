@@ -1469,9 +1469,9 @@ tbody tr:nth-child(n+6){ animation-delay: 100ms;}
         <span class="bnav-icon">🎯</span>
         <span class="bnav-label">Breaks</span>
       </button>
-      <button class="bnav-btn" onclick="nav('fixtures')" id="bnb-fixtures" style="display:none">
+      <button class="bnav-btn" onclick="nav('fixtures')" id="bnb-fixtures">
         <span class="bnav-icon">📅</span>
-        <span class="bnav-label">Fixtures</span>
+        <span class="bnav-label" id="bnb-fixtures-lbl">Fixtures</span>
       </button>
       <button class="bnav-btn" onclick="nav('participants')" id="bnb-participants">
         <span class="bnav-icon">👥</span>
@@ -2495,7 +2495,7 @@ function toast(msg,dur=2600) {
 }
 
 // ── UI CHROME HELPERS ─────────────────────────────────────
-function showLeagueChrome(lgName, isKnockout) {
+function showLeagueChrome(lgName, isKnockout, ct) {
   // Breadcrumb
   const bc = document.getElementById('breadcrumb');
   const sep = document.getElementById('breadcrumb-sep');
@@ -2516,13 +2516,22 @@ function showLeagueChrome(lgName, isKnockout) {
   const bottomNav = document.getElementById('bottom-nav');
   if (bottomNav) bottomNav.removeAttribute('style');
 
-  // Dashboard label for knockout/group types
-  const dashLabel      = isKnockout ? '🏆 Bracket' : '📊 Leaderboard';
-  const dashLabelShort = isKnockout ? 'Bracket'    : 'Board';
+  // Dashboard + Fixtures label by competition type
+  const isGS = (ct||'league') === 'group_stage';
+  const dashLabel      = isKnockout ? '🏆 Bracket' : isGS ? '📊 Groups' : '📊 Leaderboard';
+  const dashLabelShort = isKnockout ? 'Bracket'    : isGS ? 'Groups'    : 'Board';
+  const fixLabel       = isGS ? '🏆 Knockout' : '📅 Fixtures';
+  const fixLabelShort  = isGS ? 'Knockout'   : 'Fixtures';
+
   const nbDash = document.getElementById('nb-dashboard');
   const bnbDashLbl = document.getElementById('bnb-dashboard-lbl');
   if (nbDash)     nbDash.innerHTML = dashLabel;
   if (bnbDashLbl) bnbDashLbl.textContent = dashLabelShort;
+
+  const nbFix = document.getElementById('nb-fixtures');
+  const bnbFixLbl = document.getElementById('bnb-fixtures-lbl');
+  if (nbFix)     nbFix.innerHTML = fixLabel;
+  if (bnbFixLbl) bnbFixLbl.textContent = fixLabelShort;
 
   // Tab visibility is computed in render() after auth resolves — not here
 }
@@ -2574,8 +2583,8 @@ async function openLeague(id) {
   APP.config = {...lg};
   await loadLeagueData(id);
   const ct2 = lg.competitionType||'league';
-  const isKnockout = ct2==='single_elim'||ct2==='double_elim'||ct2==='group_stage';
-  showLeagueChrome(lg.name, isKnockout);
+  const isKnockout = ct2==='single_elim'||ct2==='double_elim';
+  showLeagueChrome(lg.name, isKnockout, ct2);
   render(); // render() now handles per-tab visibility internally
 }
 
@@ -2706,7 +2715,8 @@ function render() {
   }
 
   // Recompute after auth is confirmed loaded
-  const canSeeFix    = isLoggedIn() && !isKnockout && (isLeagueMember(lid) || canEditCompetition(lid));
+  // Group stage: fixtures tab shows group matches + setup (not hidden like KO)
+  const canSeeFix    = isLoggedIn() && (isGroupStage || !isKnockout) && (isLeagueMember(lid) || canEditCompetition(lid));
   const canSeeManage = canEditCompetition(lid); // true for super_admin and owners
 
   // Sync nav tab visibility
@@ -2737,25 +2747,30 @@ function render() {
 
   // ── Render content ─────────────────────────────────────
   if (APP.tab==='dashboard') {
-    if (isKnockout)    main.innerHTML=renderBracket();
-    else if(isGroupStage) main.innerHTML=renderGroupStage();
-    else               main.innerHTML=renderDashboard();
+    if (isKnockout)        main.innerHTML=renderBracket();
+    else if (isGroupStage) main.innerHTML=renderGroupStandings();  // group standings only
+    else                   main.innerHTML=renderDashboard();
     if (isKnockout) requestAnimationFrame(()=>drawBracketLines());
     return;
   }
 
   if (APP.tab==='breaks') { main.innerHTML=renderHighBreaks(); return; }
 
-  // Fixtures — logged-in members only
+  // Fixtures tab:
+  //   league/KO → standard fixture list (members only)
+  //   group stage → group matches + setup groups + knockout bracket (members only)
   if (APP.tab==='fixtures') {
     if (!isLoggedIn()) {
       main.innerHTML = renderSignInPrompt(
-        'Sign in to view fixtures',
-        'Players and competition owners can view the full fixture list and enter match scores.',
+        isGroupStage ? 'Sign in to view group fixtures' : 'Sign in to view fixtures',
+        'Players and competition owners can view fixtures and enter match scores.',
         '📅'
       );
     } else if (!canSeeFix) {
       main.innerHTML = renderAccessDenied('You need to be enrolled in this competition to view fixtures.');
+    } else if (isGroupStage) {
+      main.innerHTML = renderGroupFixtures();  // group matches + setup + knockout
+      requestAnimationFrame(()=>drawBracketLines());
     } else {
       main.innerHTML = renderFixtures();
     }
@@ -4039,6 +4054,311 @@ function renderConfig() {
 
 
 
+
+// ══════════════════════════════════════════════════════════
+// GROUP STAGE — SPLIT VIEWS
+// Dashboard tab = Group Standings only
+// Fixtures tab  = Group Matches + Setup + Knockout
+// ══════════════════════════════════════════════════════════
+
+// ── DASHBOARD: Group standings cards only ─────────────────
+function renderGroupStandings() {
+  const q = APP.config.qualifiersPerGroup || 1;
+  const gsComplete = groupStageComplete();
+  const qualifiers = getQualifiers();
+  const totalGM  = APP.groupMatches.length;
+  const playedGM = APP.groupMatches.filter(m=>m.status==='completed').length;
+  const liveGM   = APP.groupMatches.filter(m=>m.status==='live').length;
+
+  const summaryBar = `<div class="summary-bar" style="margin-bottom:20px">
+    <div class="summary-item"><div class="summary-val gold">${APP.players.length}</div><div class="summary-lbl">Players</div></div>
+    <div class="summary-item"><div class="summary-val gold">${APP.groups.length}</div><div class="summary-lbl">Groups</div></div>
+    <div class="summary-item"><div class="summary-val">${playedGM}</div><div class="summary-lbl">Played</div></div>
+    <div class="summary-item"><div class="summary-val">${totalGM-playedGM}</div><div class="summary-lbl">Remaining</div></div>
+    ${liveGM?`<div class="summary-item"><div class="summary-val green">${liveGM}</div><div class="summary-lbl">Live</div></div>`:''}
+    ${gsComplete?`<div class="summary-item"><div class="summary-val gold" style="font-size:13px">✓ Done</div><div class="summary-lbl">Group stage</div></div>`:''}
+  </div>`;
+
+  // Group standings grid
+  let groupCards = '';
+  if (APP.groups.length) {
+    groupCards = `<div class="gs-groups-grid">` +
+      APP.groups.map(grp => {
+        const standings = computeGroupStandings(grp.id);
+        const gms = APP.groupMatches.filter(m=>m.groupId===grp.id);
+        const done = groupComplete(grp.id);
+        const played = gms.filter(m=>m.status==='completed').length;
+
+        const rows = standings.map((row,i) => {
+          const fd = row.fw - row.fl;
+          const isQ = i < q;
+          return `<div class="gs-standings-row ${isQ?'qualified':''}">
+            <div class="gs-pos ${isQ?'q':''}">${i+1}</div>
+            <div class="gs-pname">${esc(row.name)}</div>
+            <div class="gs-num">${row.p}</div>
+            <div class="gs-num">${row.w}</div>
+            <div class="gs-num">${row.d}</div>
+            <div class="gs-fd ${fd>=0?'pos':'neg'}">${fd>0?'+':''}${fd}</div>
+            <div class="gs-pts">${row.pts}</div>
+          </div>`;
+        }).join('');
+
+        return `<div class="gs-group-card">
+          <div class="gs-group-hd">
+            <div class="gs-group-name">${esc(grp.name)}</div>
+            <div class="gs-group-status">${done?'✓ Complete':`${played}/${gms.length} played`}</div>
+          </div>
+          <div class="gs-standings-hd">
+            <div></div><div>Player</div>
+            <div style="text-align:center">P</div>
+            <div style="text-align:center">W</div>
+            <div style="text-align:center">D</div>
+            <div style="text-align:center">F/D</div>
+            <div style="text-align:center">Pts</div>
+          </div>
+          ${rows || `<div style="padding:12px 14px;font-size:12px;color:var(--ink-3)">No matches played yet.</div>`}
+        </div>`;
+      }).join('') + `</div>`;
+  } else {
+    groupCards = `<div class="empty">
+      <div class="empty-icon">🔱</div>
+      <div class="empty-text">Groups not set up yet.<br>
+      ${canEditCompetition(APP.activeLeagueId)
+        ? `<button class="btn btn-primary" onclick="nav('fixtures')" style="margin-top:12px">⚙️ Set up groups</button>`
+        : 'Ask the competition owner to set up groups.'}
+      </div>
+    </div>`;
+  }
+
+  // Qualifier strip when group stage complete
+  const qualifierStrip = gsComplete && qualifiers.length ? `
+  <div style="margin-top:8px;padding:14px 16px;background:rgba(201,168,76,.07);border:1px solid var(--border-2);border-radius:var(--r-lg);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+    <div>
+      <div style="font-size:13px;font-weight:700;color:var(--gold)">🏆 Group stage complete</div>
+      <div style="font-size:12px;color:var(--ink-2);margin-top:2px">${qualifiers.length} players advance to the knockout stage</div>
+    </div>
+    <button class="btn btn-ghost btn-sm" onclick="nav('fixtures')">View knockout bracket →</button>
+  </div>` : '';
+
+  return `
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
+    <div class="sec-title" style="margin:0">🔱 Group Standings — ${esc(APP.config.name||'')}</div>
+  </div>
+  ${summaryBar}
+  ${groupCards}
+  ${qualifierStrip}`;
+}
+
+// ── FIXTURES TAB: Group matches + Setup groups + Knockout ──
+function renderGroupFixtures() {
+  const gsComplete = groupStageComplete();
+  const qualifiers = getQualifiers();
+  const hasKO = APP.knockoutMatches && APP.knockoutMatches.length > 0;
+  const q = APP.config.qualifiersPerGroup || 1;
+  const canManage = canEditCompetition(APP.activeLeagueId);
+
+  // ── Phase tabs inside Fixtures ──
+  const phase = APP.gsPhase || 'groups';
+
+  // Count group matches by status
+  const upcoming = APP.groupMatches.filter(m=>m.status!=='completed');
+  const liveM    = APP.groupMatches.filter(m=>m.status==='live');
+
+  const phaseTabs = `<div class="gs-phase-tabs">
+    <div class="gs-phase-tab ${phase==='groups'?'active':''}" onclick="APP.gsPhase='groups';render()">
+      📅 Group Fixtures${gsComplete?' ✓':''}
+    </div>
+    <div class="gs-phase-tab ${phase==='knockout'?'active':''}" onclick="APP.gsPhase='knockout';render()">
+      🏆 Knockout${hasKO?' ('+APP.knockoutMatches.length+')':''}
+    </div>
+    ${canManage?`<div class="gs-phase-tab ${phase==='setup'?'active':''}" onclick="APP.gsPhase='setup';render()">
+      ⚙️ Setup groups
+    </div>`:''}
+  </div>`;
+
+  const header = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+    <div class="sec-title" style="margin:0">🔱 ${esc(APP.config.name||'')} — Fixtures</div>
+  </div>`;
+
+  if (phase === 'setup') {
+    return header + phaseTabs + renderGroupSetupPanel(canManage);
+  } else if (phase === 'knockout') {
+    return header + phaseTabs + renderKnockoutPhase(qualifiers, gsComplete, hasKO, q);
+  } else {
+    return header + phaseTabs + renderGroupMatchesPhase(liveM, upcoming, canManage);
+  }
+}
+
+// ── Setup panel (was openGroupSetup modal — now inline) ───
+function renderGroupSetupPanel(canManage) {
+  if (!canManage) return renderAccessDenied('Only competition owners can set up groups.');
+
+  const gCount = APP.config.groupCount || 4;
+  const qpg    = APP.config.qualifiersPerGroup || 1;
+  const bo     = APP.config.bestOf || 5;
+  const hasGroups = APP.groups.length > 0;
+
+  const currentGroups = hasGroups ? `
+    <div style="margin-bottom:20px">
+      <div class="gs-section-title">Current groups</div>
+      <div class="gs-groups-grid">
+        ${APP.groups.map(grp=>`<div class="gs-group-card">
+          <div class="gs-group-hd"><div class="gs-group-name">${esc(grp.name)}</div><div class="gs-group-status">${grp.playerIds.length} players</div></div>
+          ${grp.playerIds.map(pid=>{const p=APP.players.find(x=>x.id===pid);return `<div style="padding:7px 14px;font-size:12px;border-bottom:1px solid rgba(201,168,76,.05)">${p?esc(p.name):pid}</div>`;}).join('')}
+        </div>`).join('')}
+      </div>
+    </div>` : '';
+
+  return `
+  <div class="panel" style="margin-bottom:16px">
+    <div class="panel-title" style="margin-bottom:16px">Group configuration</div>
+    <div class="form-row c3">
+      <div class="form-field"><label>Number of groups</label>
+        <input id="gs-gcount" type="number" min="2" max="16" value="${gCount}" oninput="gsPreviewInline()"></div>
+      <div class="form-field"><label>Qualifiers per group</label>
+        <input id="gs-qpg" type="number" min="1" max="4" value="${qpg}"></div>
+      <div class="form-field"><label>Best of (frames)</label>
+        <input id="gs-bo" type="number" min="1" max="19" value="${bo}"></div>
+    </div>
+    <div style="font-size:12px;color:var(--ink-2);margin-bottom:14px">
+      ${APP.players.length} players registered
+      ${APP.players.length<2?'<span style="color:var(--red)"> — add at least 2 players in Participants first</span>':''}
+    </div>
+    ${APP.players.length>=2?`
+    <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+      <button class="btn btn-ghost btn-sm" onclick="gsPreviewInline()">🎲 Shuffle preview</button>
+      <button class="btn btn-primary btn-sm" onclick="commitGroupSetupInline()">
+        ${hasGroups?'🔄 Regenerate groups & fixtures':'✓ Generate groups & fixtures'}
+      </button>
+    </div>
+    <div id="gs-inline-preview" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px"></div>
+    `:''}
+  </div>
+  ${currentGroups}`;
+}
+
+// Inline shuffle preview (called from the setup panel)
+function gsPreviewInline() {
+  const gc  = +document.getElementById('gs-gcount')?.value || 4;
+  const players = [...APP.players].sort(()=>Math.random()-0.5);
+  const groups = Array.from({length:gc}, (_,i)=>({
+    name:`Group ${String.fromCharCode(65+i)}`, players:[]
+  }));
+  players.forEach((p,i) => groups[i%gc].players.push(p));
+  window._gsPreview = groups;
+  const preview = document.getElementById('gs-inline-preview');
+  if (preview) {
+    preview.innerHTML = groups.map(g=>`
+      <div style="background:var(--bg-raised);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px">
+        <div style="font-size:11px;font-weight:700;color:var(--gold);margin-bottom:6px">${g.name}</div>
+        ${g.players.map(p=>`<div style="font-size:12px;padding:3px 0;border-bottom:1px solid rgba(201,168,76,.05)">${esc(p.name)}</div>`).join('')}
+      </div>`).join('');
+  }
+}
+
+// Commit inline (no modal needed)
+async function commitGroupSetupInline() {
+  if (!window._gsPreview) { gsPreviewInline(); await new Promise(r=>setTimeout(r,50)); }
+  const groups = window._gsPreview;
+  if (!groups) { toast('Click Shuffle preview first'); return; }
+  const qpg = +document.getElementById('gs-qpg')?.value || 1;
+  const bo  = +document.getElementById('gs-bo')?.value  || 5;
+
+  APP.config.groupCount = groups.length;
+  APP.config.qualifiersPerGroup = qpg;
+  APP.config.bestOf = bo;
+  const lg = APP.leagues.find(l=>l.id===APP.activeLeagueId);
+  if (lg) { lg.groupCount=groups.length; lg.qualifiersPerGroup=qpg; lg.bestOf=bo; }
+  await persistLeague({...APP.config, id:APP.activeLeagueId});
+
+  APP.groups = groups.map(g=>({ id:genId(), name:g.name, playerIds:g.players.map(p=>p.id) }));
+
+  // Generate round-robin within each group
+  APP.groupMatches = [];
+  APP.groups.forEach(grp=>{
+    const pids = grp.playerIds;
+    const n = pids.length%2===0?pids.length:pids.length+1;
+    const rotating = [...pids.slice(1)];
+    const fixed = pids[0];
+    for (let r=0; r<n-1; r++) {
+      const rp=[fixed,...rotating];
+      for (let i=0;i<n/2;i++){
+        const a=rp[i],b=rp[n-1-i];
+        if(a&&b&&a!==b){
+          APP.groupMatches.push({
+            id:genId(),groupId:grp.id,entityA:a,entityB:b,
+            scoreA:0,scoreB:0,highBreakA:0,highBreakB:0,
+            status:'scheduled',date:'',venue:'',frameDetails:[]
+          });
+        }
+      }
+      rotating.push(rotating.shift());
+    }
+  });
+
+  APP.knockoutMatches=[];
+  await Promise.all([
+    ...APP.groups.map(g=>persistInLeague('groups',g.id,g)),
+    ...APP.groupMatches.map(m=>persistInLeague('groupMatches',m.id,m))
+  ]);
+  saveActiveToLocal();
+  toast(`${APP.groups.length} groups · ${APP.groupMatches.length} fixtures generated ✓`);
+  APP.gsPhase='groups';
+  render();
+}
+
+// ── Group matches list (inside Fixtures tab) ──────────────
+function renderGroupMatchesPhase(liveMatches, upcoming, canManage) {
+  const completed = APP.groupMatches.filter(m=>m.status==='completed')
+    .sort((a,b)=>(b.date||'').localeCompare(a.date||'')).slice(0,8);
+
+  const matchRow = (m) => {
+    const grp = APP.groups.find(g=>g.id===m.groupId);
+    const aName = (APP.players.find(p=>p.id===m.entityA)||{name:m.entityA}).name;
+    const bName = (APP.players.find(p=>p.id===m.entityB)||{name:m.entityB}).name;
+    const aShort = aName.split(' ').pop();
+    const bShort = bName.split(' ').pop();
+    const isDone = m.status==='completed';
+    const isLive = m.status==='live';
+    return `<div class="gs-match-row ${isLive?'live':''}" onclick="openGroupMatchScore('${m.id}')">
+      <div>
+        <div class="gs-match-names">${esc(aShort)}<span class="gs-vs">vs</span>${esc(bShort)}</div>
+        <div class="gs-match-meta">
+          <span>${grp?esc(grp.name):''}</span>
+          ${m.date?`<span>📅 ${m.date}</span>`:''}
+          ${m.venue?`<span>📍 ${m.venue}</span>`:''}
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        ${isDone||isLive?`<div class="gs-score">
+          <div class="gs-score-box">${m.scoreA}</div>
+          <span style="color:var(--ink-3);font-size:12px">–</span>
+          <div class="gs-score-box">${m.scoreB}</div>
+        </div>`:
+        `<span class="badge badge-scheduled" style="font-size:10px">scheduled</span>`}
+      </div>
+    </div>`;
+  };
+
+  const liveSection = liveMatches.length
+    ? `<div class="gs-section-title">🔴 Live</div>${liveMatches.map(matchRow).join('')}`
+    : '';
+  const upcomingSection = upcoming.filter(m=>m.status==='scheduled').length
+    ? `<div class="gs-section-title" style="margin-top:${liveMatches.length?16:0}px">Scheduled</div>
+       ${upcoming.filter(m=>m.status==='scheduled').map(matchRow).join('')}`
+    : '';
+  const recentSection = completed.length
+    ? `<div class="gs-section-title" style="margin-top:16px">Recent results</div>${completed.map(matchRow).join('')}`
+    : '';
+
+  const empty = !APP.groupMatches.length ? `<div class="empty">
+    <div class="empty-icon">📅</div>
+    <div class="empty-text">No fixtures yet.${canManage?' Go to <strong>⚙️ Setup groups</strong> to generate them.':' Ask the competition owner to set up groups.'}</div>
+  </div>` : '';
+
+  return `${liveSection}${upcomingSection}${recentSection}${empty}`;
+}
+
 // ══════════════════════════════════════════════════════════
 // GROUP STAGE ENGINE
 // ══════════════════════════════════════════════════════════
@@ -4097,7 +4417,8 @@ function groupComplete(groupId) {
   return gms.length > 0 && gms.every(m=>m.status==='completed');
 }
 
-// ── MAIN GROUP STAGE RENDERER ──────────────────────────────
+// ── MAIN GROUP STAGE RENDERER (legacy redirect) ────────────
+// New split: renderGroupStandings() for dashboard, renderGroupFixtures() for fixtures tab
 function renderGroupStage() {
   const phase = APP.gsPhase || 'groups'; // 'groups' | 'knockout'
   const gsComplete = groupStageComplete();
@@ -4133,8 +4454,7 @@ function renderGroupStage() {
   const header = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
     <div class="sec-title" style="margin:0">🔱 Group Stage — ${APP.config.name||''}</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-ghost btn-sm" onclick="openGroupSetup()">⚙️ Setup groups</button>
-      <button class="btn btn-ghost btn-sm" onclick="openAddBracketPlayer()">+ Add player</button>
+      <button class="btn btn-ghost btn-sm" onclick="nav('fixtures')">📅 View fixtures & setup →</button>
     </div>
   </div>`;
 
