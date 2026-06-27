@@ -929,6 +929,44 @@ tbody tr:nth-child(n+6){ animation-delay: 100ms;}
   .gs-match-row { flex-direction: column; align-items: flex-start; gap: 6px; }
   .gs-qualifiers { grid-template-columns: 1fr 1fr; }
 }
+
+/* ── IMPORT / EXPORT ─────────────────────────────────────── */
+.import-zone {
+  border: 2px dashed var(--border-2);
+  border-radius: var(--r-lg); padding: 32px 24px;
+  text-align: center; cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease;
+  background: var(--bg-raised);
+}
+.import-zone:hover, .import-zone.drag-over {
+  border-color: var(--gold-dim); background: var(--gold-muted);
+}
+.import-zone-icon { font-size: 36px; margin-bottom: 10px; opacity: .5; }
+.import-zone-msg  { font-size: 13px; color: var(--ink-2); line-height: 1.6; }
+.import-zone input[type="file"] { display: none; }
+
+.import-preview {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--r); overflow: hidden; margin-top: 14px;
+}
+.import-preview-hd {
+  padding: 10px 14px; background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px; font-weight: 600; color: var(--ink-2);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.import-preview-row {
+  display: grid; grid-template-columns: 1fr 1fr 80px;
+  padding: 8px 14px; font-size: 12px;
+  border-bottom: 1px solid rgba(201,168,76,.05);
+  align-items: center;
+}
+.import-preview-row:last-child { border-bottom: none; }
+.import-row-err { color: var(--red); font-size: 11px; }
+.import-row-ok  { color: var(--green); font-size: 11px; }
+.import-row-warn{ color: var(--amber); font-size: 11px; }
+
+.template-btns { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
 /* ── BRACKET ────────────────────────────────────────────── */
 .bracket-shell {
   overflow-x: auto; overflow-y: visible;
@@ -1384,6 +1422,7 @@ tbody tr:nth-child(n+6){ animation-delay: 100ms;}
   .um-filter-tabs { overflow-x: auto; flex-wrap: nowrap; }
 }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 <!-- Auth loading screen -->
@@ -2416,6 +2455,12 @@ async function loadLeagueData(id) {
 // Persist a league meta doc
 async function persistLeague(league) {
   saveLeaguesToLocal();
+  // Write to Firestore so the league survives page reload
+  if (db && league.id) {
+    try {
+      await db.collection(LEAGUES_COL).doc(league.id).set(league, { merge: true });
+    } catch(e) { console.warn('persistLeague Firestore error:', e.message); }
+  }
   if (!db||!fbConnected) return;
   try { await db.collection(LEAGUES_COL).doc(league.id).set(league, {merge:true}); } catch(e){}
 }
@@ -2582,10 +2627,26 @@ async function openLeague(id) {
   const lg=APP.leagues.find(l=>l.id===id);
   APP.config = {...lg};
   await loadLeagueData(id);
+
+  // Ensure membership is in memory — re-check Firestore if not set.
+  // Handles case where owner opens a newly-created competition without a reload.
+  if (APP.auth.uid && !APP.auth.memberships[id] && db) {
+    try {
+      const memDoc = await db.collection(LEAGUES_COL).doc(id)
+        .collection('members').doc(APP.auth.uid).get({ source: 'server' });
+      if (memDoc.exists) {
+        APP.auth.memberships[id] = memDoc.data();
+      } else if (lg.createdBy === APP.auth.uid) {
+        // Created by this user but membership doc missing — create it
+        await claimCompetitionOwnership(id);
+      }
+    } catch(e) { /* offline — proceed with existing state */ }
+  }
+
   const ct2 = lg.competitionType||'league';
   const isKnockout = ct2==='single_elim'||ct2==='double_elim';
   showLeagueChrome(lg.name, isKnockout, ct2);
-  render(); // render() now handles per-tab visibility internally
+  render();
 }
 
 function nav(tab) {
@@ -3907,49 +3968,429 @@ function inlineEditVenue(matchId, el, venueListStr) {
 // PARTICIPANTS
 // ══════════════════════════════════════════════════════════
 function renderParticipants() {
-  const isTeam=APP.config.format==='team';
-  let html=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
+  const isTeam = APP.config.format === 'team';
+  const canManage = canEditCompetition(APP.activeLeagueId);
+
+  // ── Action bar ────────────────────────────────────────────
+  const actionBar = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
     <div class="sec-title" style="margin:0">${isTeam?'Teams & rosters':'Player registry'}</div>
-    <button class="btn btn-primary btn-sm" onclick="${isTeam?'openAddTeam()':'openAddPlayer()'}">+ Add ${isTeam?'team':'player'}</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${canManage ? `
+      <button class="btn btn-ghost btn-sm" onclick="openImportParticipants()" title="Import from CSV or Excel">
+        📥 Import
+      </button>
+      <button class="btn btn-ghost btn-sm" onclick="exportParticipants()" title="Export to Excel">
+        📤 Export
+      </button>
+      <button class="btn btn-primary btn-sm" onclick="${isTeam?'openAddTeam()':'openAddPlayer()'}">
+        + Add ${isTeam?'team':'player'}
+      </button>` : ''}
+    </div>
   </div>`;
 
-  if(isTeam){
-    if(!APP.teams.length)return html+`<div class="empty"><div class="empty-icon">👥</div><div class="empty-text">No teams yet.</div></div>`;
-    APP.teams.forEach(team=>{
-      const open=APP.openTeams[team.id];
-      const players=APP.players.filter(p=>(team.players||[]).includes(p.id));
-      html+=`<div class="team-accordion">
+  let html = actionBar;
+
+  if (isTeam) {
+    if (!APP.teams.length) return html + `<div class="empty"><div class="empty-icon">👥</div><div class="empty-text">No teams yet.</div></div>`;
+    APP.teams.forEach(team => {
+      const open = APP.openTeams[team.id];
+      const players = APP.players.filter(p=>(team.players||[]).includes(p.id));
+      html += `<div class="team-accordion">
         <div class="acc-hd ${open?'open':''}" onclick="APP.openTeams['${team.id}']=!APP.openTeams['${team.id}'];render()">
           <div><div class="acc-name">${esc(team.name)}</div><div class="acc-meta">📍 ${team.venue||'No venue'} · ${players.length} player${players.length!==1?'s':''}</div></div>
           <div style="display:flex;gap:6px;align-items:center">
-            <button class="btn btn-ghost btn-xs" onclick="event.stopPropagation();openAddPlayerToTeam('${team.id}')">+ Player</button>
-            <button class="btn btn-danger btn-xs" onclick="event.stopPropagation();delTeam('${team.id}')">Remove</button>
+            ${canManage?`<button class="btn btn-ghost btn-xs" onclick="event.stopPropagation();openAddPlayerToTeam('${team.id}')">+ Player</button>
+            <button class="btn btn-danger btn-xs" onclick="event.stopPropagation();delTeam('${team.id}')">Remove</button>`:''}
             <span style="color:var(--ink-3);font-size:15px">${open?'▲':'▼'}</span>
           </div>
         </div>
         <div class="acc-body ${open?'open':''}">
-          ${players.length?players.map(p=>`<div class="player-row"><div><div style="font-weight:500">${esc(p.name)}</div><div style="font-size:12px;color:var(--ink-3)">${esc(p.contact)||''} ${p.handicap?'· Handicap: '+p.handicap:''}</div></div><button class="btn btn-danger btn-xs" onclick="removeFromTeam('${team.id}','${p.id}')">✕</button></div>`).join(''):
-          `<div style="color:var(--ink-3);font-size:13px;padding:10px 0">No players. Click "+ Player" to add.</div>`}
-          <div style="padding-top:10px"><button class="btn btn-ghost btn-sm" onclick="openAddPlayerToTeam('${team.id}')">+ Add player to team</button></div>
+          ${players.length
+            ? players.map(p=>`<div class="player-row"><div><div style="font-weight:500">${esc(p.name)}</div><div style="font-size:12px;color:var(--ink-3)">${esc(p.contact)||''} ${p.handicap?'· Handicap: '+p.handicap:''}</div></div>
+              ${canManage?`<button class="btn btn-danger btn-xs" onclick="removeFromTeam('${team.id}','${p.id}')">✕</button>`:''}</div>`).join('')
+            : `<div style="color:var(--ink-3);font-size:13px;padding:10px 0">No players yet.</div>`}
+          ${canManage?`<div style="padding-top:10px"><button class="btn btn-ghost btn-sm" onclick="openAddPlayerToTeam('${team.id}')">+ Add player to team</button></div>`:''}
         </div>
       </div>`;
     });
   } else {
-    if(!APP.players.length)return html+`<div class="empty"><div class="empty-icon">🎱</div><div class="empty-text">No players yet.</div></div>`;
-    html+=`<div class="panel" style="padding:0;overflow:hidden"><div class="tbl-wrap"><table>
-      <thead><tr><th>#</th><th>Name</th><th>Contact</th><th>Handicap</th><th></th></tr></thead><tbody>`;
-    APP.players.forEach((p,i)=>{
-      html+=`<tr><td style="color:var(--ink-3)">${i+1}</td><td class="name-cell">${esc(p.name)}</td><td style="color:var(--ink-2)">${esc(p.contact)||'—'}</td><td>${p.handicap||0}</td>
-        <td><button class="btn btn-danger btn-xs" onclick="delPlayer('${p.id}')">Remove</button></td></tr>`;
+    // Individual player table
+    if (!APP.players.length) return html + `<div class="empty"><div class="empty-icon">🎱</div>
+      <div class="empty-text">No players yet.${canManage?`<br><button class="btn btn-primary" onclick="openImportParticipants()" style="margin-top:12px">📥 Import from CSV/Excel</button>`:''}
+      </div></div>`;
+
+    const count = APP.players.length;
+    html += `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <span style="font-size:12px;color:var(--ink-3)">${count} player${count!==1?'s':''} registered</span>
+    </div>`;
+
+    html += `<div class="panel" style="padding:0;overflow:hidden"><div class="tbl-wrap"><table>
+      <thead><tr><th>#</th><th>Name</th><th>Contact</th><th>Handicap</th>${canManage?'<th></th>':''}</tr></thead><tbody>`;
+
+    APP.players.forEach((p,i) => {
+      html += `<tr>
+        <td style="color:var(--ink-3)">${i+1}</td>
+        <td class="name-cell">${esc(p.name)}</td>
+        <td style="color:var(--ink-2)">${esc(p.contact)||'—'}</td>
+        <td>${p.handicap||0}</td>
+        ${canManage?`<td><button class="btn btn-danger btn-xs" onclick="delPlayer('${p.id}')">Remove</button></td>`:''}
+      </tr>`;
     });
-    html+=`</tbody></table></div></div>`;
+    html += `</tbody></table></div></div>`;
   }
   return html;
 }
 
 // ══════════════════════════════════════════════════════════
-// CONFIG (league-level)
+// PARTICIPANT IMPORT / EXPORT
+// Supports: CSV upload, Excel (.xlsx) upload, template download
 // ══════════════════════════════════════════════════════════
+
+// ── TEMPLATE DOWNLOAD ─────────────────────────────────────
+function downloadTemplate(format) {
+  const isTeam = APP.config.format === 'team';
+
+  if (format === 'csv') {
+    // CSV template
+    const headers = isTeam
+      ? 'Team Name,Venue,Player 1 Name,Player 1 Contact,Player 2 Name,Player 2 Contact,Player 3 Name,Player 3 Contact'
+      : 'Name,Contact (email or phone),Handicap';
+    const example = isTeam
+      ? 'Cue Masters,Table 1,Ronnie O\'Sullivan,ronnie@max147.com,Judd Trump,judd@max147.com,,,\nBreak Artists,Table 2,Mark Selby,mark@max147.com,Neil Robertson,neil@max147.com,,,,'
+      : "Ronnie O'Sullivan,ronnie@max147.com,0\nJudd Trump,judd@max147.com,0\nMark Selby,mark@max147.com,2";
+    const csv = headers + '\n' + example;
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `max147_${isTeam?'teams':'players'}_template.csv`;
+    a.click(); URL.revokeObjectURL(a.href);
+    toast('CSV template downloaded ✓');
+  } else {
+    // Excel template using SheetJS
+    if (typeof XLSX === 'undefined') { toast('SheetJS not loaded — use CSV instead'); return; }
+    const wb = XLSX.utils.book_new();
+
+    if (isTeam) {
+      const data = [
+        ['Team Name','Venue','Player 1 Name','Player 1 Contact','Player 2 Name','Player 2 Contact','Player 3 Name','Player 3 Contact'],
+        ['Cue Masters','Table 1','Ronnie O\'Sullivan','ronnie@max147.com','Judd Trump','judd@max147.com','',''],
+        ['Break Artists','Table 2','Mark Selby','mark@max147.com','Neil Robertson','neil@max147.com','',''],
+      ];
+      const ws = XLSX.utils.aoa_to_sheet(data);
+      ws['!cols'] = [14,12,20,24,20,24,20,24].map(w=>({wch:w}));
+      XLSX.utils.book_append_sheet(wb, ws, 'Teams');
+    } else {
+      const data = [
+        ['Name','Contact (email or phone)','Handicap'],
+        ["Ronnie O'Sullivan",'ronnie@max147.com',0],
+        ['Judd Trump','judd@max147.com',0],
+        ['Mark Selby','mark@max147.com',2],
+        ['Neil Robertson','neil@max147.com',0],
+      ];
+      const ws = XLSX.utils.aoa_to_sheet(data);
+      ws['!cols'] = [{wch:24},{wch:28},{wch:10}];
+      // Style header row
+      ['A1','B1','C1'].forEach(ref => {
+        if (!ws[ref]) return;
+        ws[ref].s = { font:{ bold:true }, fill:{ fgColor:{ rgb:'0F2218' } } };
+      });
+      XLSX.utils.book_append_sheet(wb, ws, 'Players');
+    }
+
+    // Add instructions sheet
+    const infoData = [
+      ['MAX147 League Manager — Participant Import Template'],
+      [''],
+      ['Instructions:'],
+      ['1. Fill in the Players (or Teams) sheet — do not change column headers'],
+      ['2. Name is required. Contact and Handicap are optional.'],
+      ['3. Handicap should be a number (0 = no handicap)'],
+      ['4. Save the file, then upload it in the Participants tab'],
+      ['5. Existing players will NOT be removed — the import adds to the list'],
+      [''],
+      ['Supported formats: .xlsx  .xls  .csv'],
+    ];
+    const infoWs = XLSX.utils.aoa_to_sheet(infoData);
+    infoWs['!cols'] = [{wch:60}];
+    XLSX.utils.book_append_sheet(wb, infoWs, 'Instructions');
+
+    XLSX.writeFile(wb, `max147_${isTeam?'teams':'players'}_template.xlsx`);
+    toast('Excel template downloaded ✓');
+  }
+}
+
+// ── IMPORT MODAL ───────────────────────────────────────────
+function openImportParticipants() {
+  const isTeam = APP.config.format === 'team';
+  openModal('Import participants',
+    `<div class="template-btns">
+      <span style="font-size:12px;color:var(--ink-3);align-self:center">Download template:</span>
+      <button class="btn btn-ghost btn-sm" onclick="downloadTemplate('csv')">📄 CSV template</button>
+      <button class="btn btn-ghost btn-sm" onclick="downloadTemplate('xlsx')">📊 Excel template</button>
+    </div>
+
+    <div class="import-zone" id="import-drop-zone" onclick="document.getElementById('import-file-input').click()"
+      ondragover="event.preventDefault();this.classList.add('drag-over')"
+      ondragleave="this.classList.remove('drag-over')"
+      ondrop="event.preventDefault();this.classList.remove('drag-over');handleImportDrop(event)">
+      <div class="import-zone-icon">📥</div>
+      <div class="import-zone-msg">
+        <strong>Click to browse</strong> or drag & drop a file here<br>
+        <span style="font-size:11px;color:var(--ink-3)">Supports .csv, .xlsx, .xls — max 5MB</span>
+      </div>
+      <input type="file" id="import-file-input" accept=".csv,.xlsx,.xls"
+        onchange="handleImportFile(this.files[0])">
+    </div>
+
+    <div id="import-preview-area"></div>
+
+    <div style="margin-top:14px;padding:10px 14px;background:var(--bg-raised);border-radius:var(--r);font-size:12px;color:var(--ink-2)">
+      <strong>Note:</strong> Import <em>adds</em> players to the existing list.
+      Duplicate names (exact match) are skipped. To replace all players, use
+      <em>Reset league</em> in Config first.
+    </div>`,
+    `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" id="import-confirm-btn" style="display:none" onclick="confirmImport()">
+       Import players
+     </button>`
+  );
+  // Reset state
+  window._importRows = null;
+}
+
+function handleImportDrop(event) {
+  const file = event.dataTransfer.files[0];
+  if (file) handleImportFile(file);
+}
+
+function handleImportFile(file) {
+  if (!file) return;
+  if (file.size > 5 * 1024 * 1024) { toast('File too large — max 5MB'); return; }
+
+  const ext = file.name.split('.').pop().toLowerCase();
+  const reader = new FileReader();
+
+  if (ext === 'csv') {
+    reader.onload = e => parseCSVImport(e.target.result);
+    reader.readAsText(file);
+  } else if (ext === 'xlsx' || ext === 'xls') {
+    reader.onload = e => parseExcelImport(e.target.result);
+    reader.readAsArrayBuffer(file);
+  } else {
+    toast('Unsupported format — use .csv, .xlsx, or .xls');
+  }
+}
+
+// ── CSV PARSER ─────────────────────────────────────────────
+function parseCSVImport(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if (!lines.length) { toast('Empty file'); return; }
+
+  // Detect header row (first row — skip it)
+  const header = lines[0].toLowerCase();
+  const hasHeader = header.includes('name') || header.includes('player') || header.includes('contact');
+  const dataLines = hasHeader ? lines.slice(1) : lines;
+
+  const rows = dataLines.map(line => parseCSVLine(line));
+  processImportRows(rows, hasHeader ? lines[0] : null);
+}
+
+function parseCSVLine(line) {
+  // RFC 4180 CSV parser
+  const cols = [];
+  let current = '', inQuote = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuote && line[i+1] === '"') { current += '"'; i++; }
+      else inQuote = !inQuote;
+    } else if (ch === ',' && !inQuote) {
+      cols.push(current.trim()); current = '';
+    } else {
+      current += ch;
+    }
+  }
+  cols.push(current.trim());
+  return cols;
+}
+
+// ── EXCEL PARSER ───────────────────────────────────────────
+function parseExcelImport(arrayBuffer) {
+  if (typeof XLSX === 'undefined') {
+    toast('Excel parsing not available — please use CSV format');
+    return;
+  }
+  try {
+    const wb = XLSX.read(arrayBuffer, { type: 'array' });
+    // Use first sheet that isn't named "Instructions"
+    const sheetName = wb.SheetNames.find(n => n.toLowerCase() !== 'instructions') || wb.SheetNames[0];
+    const ws = wb.Sheets[sheetName];
+    const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    if (!data.length) { toast('Empty sheet'); return; }
+
+    // First row is header
+    const header = data[0];
+    const rows = data.slice(1).filter(r => r.some(cell => String(cell).trim()));
+    processImportRows(rows, header.join(','));
+  } catch(e) {
+    toast('Could not read Excel file: ' + e.message);
+  }
+}
+
+// ── PROCESS PARSED ROWS ────────────────────────────────────
+function processImportRows(rows, headerLine) {
+  const isTeam = APP.config.format === 'team';
+  const existingNames = new Set(APP.players.map(p => p.name.toLowerCase().trim()));
+  const processed = [];
+
+  rows.forEach((cols, i) => {
+    if (!cols.length || !cols[0]) return;
+    const name    = String(cols[0]).trim();
+    const contact = String(cols[1] || '').trim();
+    const handicap= parseInt(cols[2]) || 0;
+
+    if (!name) return;
+
+    const isDuplicate = existingNames.has(name.toLowerCase());
+    const isValid     = name.length >= 1 && name.length <= 80;
+
+    processed.push({
+      name, contact, handicap,
+      status: isDuplicate ? 'duplicate' : !isValid ? 'error' : 'ok',
+      error:  !isValid ? 'Name too long (max 80 chars)' : isDuplicate ? 'Already in list' : null,
+    });
+  });
+
+  if (!processed.length) {
+    document.getElementById('import-preview-area').innerHTML =
+      `<div class="alert alert-warn" style="margin-top:12px">No valid rows found. Check your file format matches the template.</div>`;
+    return;
+  }
+
+  window._importRows = processed;
+
+  const okCount   = processed.filter(r=>r.status==='ok').length;
+  const dupCount  = processed.filter(r=>r.status==='duplicate').length;
+  const errCount  = processed.filter(r=>r.status==='error').length;
+  const showMax   = 8;
+  const shown     = processed.slice(0, showMax);
+
+  const rows_html = shown.map(r => `
+    <div class="import-preview-row">
+      <div style="font-weight:${r.status==='ok'?600:400}">${esc(r.name)}</div>
+      <div style="color:var(--ink-3)">${esc(r.contact)||'—'}</div>
+      <div class="import-row-${r.status==='ok'?'ok':r.status==='duplicate'?'warn':'err'}">
+        ${r.status==='ok'?'✓ Ready':r.status==='duplicate'?'Skip (exists)':'✗ '+r.error}
+      </div>
+    </div>`).join('');
+
+  const more = processed.length > showMax
+    ? `<div style="padding:8px 14px;font-size:11px;color:var(--ink-3)">…and ${processed.length-showMax} more rows</div>`
+    : '';
+
+  document.getElementById('import-preview-area').innerHTML = `
+    <div class="import-preview">
+      <div class="import-preview-hd">
+        <span>Preview — ${processed.length} rows</span>
+        <span style="font-size:11px">
+          <span style="color:var(--green)">${okCount} ready</span>
+          ${dupCount?`&nbsp;·&nbsp;<span style="color:var(--amber)">${dupCount} skip</span>`:''}
+          ${errCount?`&nbsp;·&nbsp;<span style="color:var(--red)">${errCount} error</span>`:''}
+        </span>
+      </div>
+      <div class="import-preview-row" style="background:var(--bg-raised);font-weight:600;font-size:11px;color:var(--ink-2)">
+        <div>Name</div><div>Contact</div><div>Status</div>
+      </div>
+      ${rows_html}${more}
+    </div>`;
+
+  // Show confirm button only if there's something to import
+  const btn = document.getElementById('import-confirm-btn');
+  if (btn) {
+    btn.style.display = okCount > 0 ? '' : 'none';
+    btn.textContent = `Import ${okCount} player${okCount!==1?'s':''}`;
+  }
+}
+
+// ── CONFIRM IMPORT ─────────────────────────────────────────
+async function confirmImport() {
+  const rows = window._importRows;
+  if (!rows) return;
+
+  const toAdd = rows.filter(r => r.status === 'ok');
+  if (!toAdd.length) { toast('Nothing to import'); return; }
+
+  let added = 0;
+  for (const row of toAdd) {
+    const p = { id:genId(), name:row.name, contact:row.contact, handicap:row.handicap };
+    APP.players.push(p);
+    await persistInLeague('players', p.id, p);
+    added++;
+  }
+
+  saveActiveToLocal();
+  closeModal();
+  toast(`✓ ${added} player${added!==1?'s':''} imported`);
+  window._importRows = null;
+  render();
+}
+
+// ── EXPORT PARTICIPANTS ────────────────────────────────────
+function exportParticipants() {
+  const isTeam = APP.config.format === 'team';
+  const lgName = (APP.config.name || 'competition').replace(/[^a-z0-9]/gi,'_').toLowerCase();
+
+  if (typeof XLSX === 'undefined') {
+    // Fallback to CSV if SheetJS not loaded
+    exportParticipantsCSV();
+    return;
+  }
+
+  const wb = XLSX.utils.book_new();
+
+  if (isTeam) {
+    const header = ['Team Name','Venue','Players'];
+    const rows = APP.teams.map(t => {
+      const names = (t.players||[]).map(pid => {
+        const p = APP.players.find(x=>x.id===pid);
+        return p ? p.name : pid;
+      }).join(', ');
+      return [t.name, t.venue||'', names];
+    });
+    const ws = XLSX.utils.aoa_to_sheet([header,...rows]);
+    ws['!cols'] = [{wch:24},{wch:16},{wch:48}];
+    XLSX.utils.book_append_sheet(wb, ws, 'Teams');
+  } else {
+    const header = ['#','Name','Contact','Handicap'];
+    const rows = APP.players.map((p,i) => [i+1, p.name, p.contact||'', p.handicap||0]);
+    const ws = XLSX.utils.aoa_to_sheet([header,...rows]);
+    ws['!cols'] = [{wch:5},{wch:26},{wch:28},{wch:10}];
+    XLSX.utils.book_append_sheet(wb, ws, 'Players');
+  }
+
+  // Add stats sheet for individual format
+  if (!isTeam && APP.matches.some(m=>m.status==='completed')) {
+    const statsHeader = ['Name','Played','Won','Drawn','Lost','Points','High Break'];
+    const statsRows = computeStandings().map(s => [s.name,s.p,s.w,s.d,s.l,s.pts,s.hb||0]);
+    const statsWs = XLSX.utils.aoa_to_sheet([statsHeader,...statsRows]);
+    statsWs['!cols'] = [{wch:24},{wch:8},{wch:7},{wch:8},{wch:7},{wch:8},{wch:12}];
+    XLSX.utils.book_append_sheet(wb, statsWs, 'Standings');
+  }
+
+  XLSX.writeFile(wb, `max147_${lgName}_players.xlsx`);
+  toast('Players exported to Excel ✓');
+}
+
+function exportParticipantsCSV() {
+  const rows = [['Name','Contact','Handicap']];
+  APP.players.forEach(p => rows.push([p.name, p.contact||'', p.handicap||0]));
+  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv], { type:'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download='max147_players.csv'; a.click();
+  URL.revokeObjectURL(a.href);
+  toast('Players exported to CSV ✓');
+}
 function renderConfig() {
   const lg=L();
   return `
@@ -4004,13 +4445,14 @@ function renderConfig() {
     <div style="margin-top:14px"><button class="btn btn-primary btn-sm" onclick="saveLeagueConfig()">Save</button></div>
   </div>`:''}
 
-  <div class="panel">
+  ${(APP.config.competitionType==='single_elim'||APP.config.competitionType==='double_elim')?'':
+  `<div class="panel">
     <div class="panel-hd"><div class="panel-title">Point allocation</div><span style="font-size:11px;color:var(--ink-3)">Changes apply retroactively</span></div>
     <div class="pt-row"><div class="pt-label">🏆 Win <small>POINTS_WIN</small></div><input class="pt-input" type="number" value="${APP.config.pointsWin??3}" oninput="APP.config.pointsWin=+this.value;render()"></div>
     <div class="pt-row"><div class="pt-label">🤝 Draw <small>POINTS_DRAW</small></div><input class="pt-input" type="number" value="${APP.config.pointsDraw??1}" oninput="APP.config.pointsDraw=+this.value;render()"></div>
     <div class="pt-row"><div class="pt-label">❌ Loss <small>POINTS_LOSE</small></div><input class="pt-input" type="number" value="${APP.config.pointsLose??0}" oninput="APP.config.pointsLose=+this.value;render()"></div>
     <div style="margin-top:14px"><button class="btn btn-primary btn-sm" onclick="saveLeagueConfig()">Save points</button></div>
-  </div>
+  </div>`}
 
   <div class="panel">
     <div class="panel-hd"><div class="panel-title">High breaks</div><span style="font-size:11px;color:var(--ink-3)">Qualifying score threshold</span></div>
@@ -5505,10 +5947,14 @@ function openCreateLeague() {
         <div class="tog" onclick="setNlFmt('team',this)">Team</div>
       </div>
     </div>
-    <div class="form-row c3">
+    <div class="form-row c3" id="nl-pts-row">
       <div class="form-field"><label>Win pts</label><input id="nl-pw" type="number" value="3"></div>
       <div class="form-field"><label>Draw pts</label><input id="nl-pd" type="number" value="1"></div>
       <div class="form-field"><label>Loss pts</label><input id="nl-pl" type="number" value="0"></div>
+    </div>
+    <div class="form-row c2" id="nl-gs-row" style="display:none">
+      <div class="form-field"><label>Number of groups</label><input id="nl-gc" type="number" min="2" max="16" value="4"></div>
+      <div class="form-field"><label>Qualifiers per group</label><input id="nl-qpg" type="number" min="1" max="4" value="1"></div>
     </div>`,
     `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
      <button class="btn btn-primary" onclick="createLeague()">Create league</button>`
@@ -5521,9 +5967,16 @@ function setNlCt(ct,el){
   window._nlCt=ct;
   document.querySelectorAll('#nl-ct-tg .tog').forEach(t=>t.classList.remove('on'));
   el.classList.add('on');
-  // Hide format row for knockout competitions
+  // Format row: only for league
   const fmtRow=document.getElementById('nl-fmt-row');
   if(fmtRow) fmtRow.style.display=ct==='league'?'':'none';
+  // Points row: hidden for KO types
+  const ptsRow=document.getElementById('nl-pts-row');
+  const isKO = ct==='single_elim'||ct==='double_elim';
+  if(ptsRow) ptsRow.style.display=isKO?'none':'';
+  // Group stage fields
+  const gsRow=document.getElementById('nl-gs-row');
+  if(gsRow) gsRow.style.display=ct==='group_stage'?'':'none';
 }
 function setNlFmt(fmt,el){
   window._nlFmt=fmt;
@@ -5534,26 +5987,36 @@ function setNlFmt(fmt,el){
 async function createLeague() {
   const name=document.getElementById('nl-name').value.trim();
   if(!name){toast('League name is required');return;}
+  const ct = window._nlCt||'league';
+  const isLeagueType = ct === 'league' || ct === 'group_stage';
   const lg={
-    id:genId(), name, season:document.getElementById('nl-season').value.trim(),
+    id:genId(), name,
+    season:document.getElementById('nl-season').value.trim(),
     description:document.getElementById('nl-desc').value.trim(),
     format:window._nlFmt||'individual',
-    bestOf:+document.getElementById('nl-bo').value||7,
+    bestOf:+(document.getElementById('nl-bo')?.value)||7,
     status:document.getElementById('nl-status').value,
-    pointsWin:+document.getElementById('nl-pw').value||3,
-    pointsDraw:+document.getElementById('nl-pd').value||1,
-    pointsLose:+document.getElementById('nl-pl').value||0,
-    highBreakThreshold:50,
+    // Points only relevant for league/group_stage types
+    pointsWin:  isLeagueType ? +(document.getElementById('nl-pw')?.value||3) : 0,
+    pointsDraw: isLeagueType ? +(document.getElementById('nl-pd')?.value||1) : 0,
+    pointsLose: isLeagueType ? +(document.getElementById('nl-pl')?.value||0) : 0,
+    highBreakThreshold:+(document.getElementById('nl-hbthresh')?.value||50),
     trackHighBreaks:true,
-    competitionType:window._nlCt||'league',
+    competitionType:ct,
+    groupCount:+(document.getElementById('nl-gc')?.value||4),
+    qualifiersPerGroup:+(document.getElementById('nl-qpg')?.value||1),
     createdBy: APP.auth.uid || null,
     createdAt:new Date().toISOString().slice(0,10)
   };
   APP.leagues.unshift(lg);
   await persistLeague(lg);
-  // Claim ownership if logged in
+  // Claim ownership — updates APP.auth.memberships immediately so
+  // canEditCompetition() works without a page reload
   if (APP.auth.uid) await claimCompetitionOwnership(lg.id);
-  closeModal(); toast('Competition created ✓'); render();
+  saveLeaguesToLocal();    // ensure localStorage is up to date
+  closeModal();
+  toast('Competition created ✓');
+  render();                // update hub immediately
 }
 
 function openEditLeague(id) {
@@ -5901,6 +6364,7 @@ async function commitRR(){
 
 // ── HIGH BREAK MANAGEMENT ─────────────────────────────────
 function openConfigBreakThreshold() {
+  if (!canEditCompetition(APP.activeLeagueId)) { toast("You don't have permission to change settings"); return; }
   openModal('High break threshold',
     `<div class="alert alert-info" style="margin-bottom:14px">
       Only breaks at or above this score appear in the High Breaks list. Changing this does not delete existing break records — it just adjusts the filter.
@@ -5928,6 +6392,7 @@ async function saveBreakThreshold() {
 }
 
 function openAddBreak() {
+  if (!canEditCompetition(APP.activeLeagueId)) { toast("You don't have permission to log breaks"); return; }
   const playerList = APP.config.format==='team'
     ? APP.players
     : APP.players;
@@ -6028,6 +6493,7 @@ async function extractAndSaveBreaks(match) {
 }
 
 async function delBreak(id) {
+  if (!canEditCompetition(APP.activeLeagueId)) { toast("You don't have permission"); return; }
   APP.breaks = APP.breaks.filter(b=>b.id!==id);
   await deleteInLeague('breaks', id);
   toast('Break removed'); render();
