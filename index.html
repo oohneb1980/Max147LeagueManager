@@ -1888,23 +1888,34 @@ async function loadUserProfile(uid) {
   if (!db) { APP.auth.role='public'; return; }
   try {
     // Force fetch from server — bypasses offline persistence cache
-    // so role changes made in Firebase console are picked up immediately
     const snap = await db.collection('users').doc(uid).get({ source: 'server' });
     if (snap.exists) {
       const data = snap.data();
       APP.auth.role = data.role || 'player';
     } else {
-      // First sign-in: create user profile
+      // First sign-in: create user profile with player role
       const profile = {
         uid, email: APP.auth.email,
         displayName: APP.auth.displayName,
-        role: 'player', // default role
+        role: 'player',
         createdAt: new Date().toISOString()
       };
       await db.collection('users').doc(uid).set(profile);
       APP.auth.role = 'player';
     }
-    // Load memberships — also force server fetch
+  } catch(e) {
+    // Server fetch failed — try cache
+    try {
+      const snap = await db.collection('users').doc(uid).get({ source: 'cache' });
+      if (snap.exists) APP.auth.role = snap.data().role || 'player';
+      else APP.auth.role = 'player';
+    } catch(e2) { APP.auth.role = 'player'; }
+  }
+
+  // Load memberships SEPARATELY so a failing index doesn't reset the role
+  // The collectionGroup query requires a Firestore composite index on members.uid
+  // If that index isn't deployed yet it throws — role is already set above so this is safe
+  try {
     const memSnap = await db.collectionGroup('members')
       .where('uid','==',uid)
       .get({ source: 'server' });
@@ -1916,11 +1927,10 @@ async function loadUserProfile(uid) {
     });
     APP.auth.memberships = mems;
   } catch(e) {
-    // If server fetch fails (offline), fall back to cache
-    try {
-      const snap = await db.collection('users').doc(uid).get({ source: 'cache' });
-      if (snap.exists) APP.auth.role = snap.data().role || 'player';
-    } catch(e2) { APP.auth.role = 'player'; }
+    // Index not deployed or offline — memberships stay empty
+    // Super admins can still edit all competitions via isSuperAdmin() check
+    console.warn('Could not load memberships (index may not be deployed):', e.message);
+    APP.auth.memberships = APP.auth.memberships || {};
   }
 }
 
@@ -2453,6 +2463,10 @@ async function syncMax147Session(sessionId) {
     return {scoreA,scoreB,highBreakA,highBreakB,frameDetails:fd};
   } catch(e){return null;}
 }
+
+// ── HELPERS ────────────────────────────────────────────────
+const genId = () => 'x' + Math.random().toString(36).slice(2,9);
+const L     = () => APP.leagues.find(l => l.id === APP.activeLeagueId);
 
 // ── HTML ESCAPE — always use for user-supplied strings in innerHTML ──
 // Prevents XSS: <script>, onerror=, href=javascript:, etc.
@@ -5212,6 +5226,7 @@ async function createLeague() {
     highBreakThreshold:50,
     trackHighBreaks:true,
     competitionType:window._nlCt||'league',
+    createdBy: APP.auth.uid || null,
     createdAt:new Date().toISOString().slice(0,10)
   };
   APP.leagues.unshift(lg);
