@@ -1573,7 +1573,7 @@ const APP = {
   sortCol: 'pts', sortDir: -1,
   openTeams: {},
   hubFilter: { active:true, draft:true, closed:false },
-  umFilter: 'all',   // user management role filter: 'all'|'super_admin'|'competition_owner'|'player'
+  umFilter: 'all',   // user management role filter: 'all'|'super_admin'|'player'
   umSearch: '',      // user management search string
   gsPhase: 'groups',  // group_stage phase: 'groups' | 'knockout'
 
@@ -1584,7 +1584,7 @@ const APP = {
     email:       null,
     displayName: null,
     photoURL:    null,
-    role:        'public',  // 'super_admin' | 'competition_owner' | 'player' | 'public'
+    role:        'public',  // system role: 'super_admin' | 'player' | 'public'
     memberships: {},        // {leagueId: {role:'owner'|'player', playerId?}}
     loading:     true,
   },
@@ -1863,27 +1863,64 @@ const BRACKET_SEED = {
 let auth = null; // Firebase Auth instance
 
 // ── ROLE HELPERS ──────────────────────────────────────────
-const ROLES = { super_admin:4, competition_owner:3, player:2, public:1 };
-function roleLevel(r) { return ROLES[r] || 1; }
-function isSuperAdmin() { return APP.auth.role === 'super_admin'; }
-function isOwner()      { return roleLevel(APP.auth.role) >= roleLevel('competition_owner'); }
-function isPlayer()     { return roleLevel(APP.auth.role) >= roleLevel('player'); }
-function isLoggedIn()   { return !!APP.auth.uid; }
+// Multi-role model: a user can hold multiple roles simultaneously.
+//
+//  APP.auth.role       → system-level string ('super_admin' | 'player' | 'public')
+//  APP.auth.memberships → per-competition roles {leagueId: {role:'owner'|'player'}}
+//
+// Super admin:  full access everywhere — no need to be in members subcollection
+// Owner:        full control of competitions they created/were assigned to own
+// Player:       can view enrolled competitions and enter their own match scores
+// Public:       read-only — dashboards and high breaks only
+//
+// Roles are ADDITIVE. A user can be owner of competition A and player in B.
+// isSuperAdmin() is the only system-level gate. Everything else checks memberships.
 
-// Can user edit this competition?
-function canEditCompetition(leagueId) {
+function isSuperAdmin()  { return APP.auth.role === 'super_admin'; }
+function isLoggedIn()    { return !!APP.auth.uid; }
+
+// Is the user a player or owner in ANY competition (i.e. has any membership)?
+function isPlayer() {
+  if (!isLoggedIn()) return false;
   if (isSuperAdmin()) return true;
-  const mem = APP.auth.memberships[leagueId];
-  return mem && mem.role === 'owner';
+  return Object.keys(APP.auth.memberships || {}).length > 0;
 }
 
-// Is this user an enrolled member of the competition (player or owner)?
+// Is the user an owner of ANY competition, or a super admin?
+function isOwner() {
+  if (isSuperAdmin()) return true;
+  return Object.values(APP.auth.memberships || {}).some(m => m.role === 'owner');
+}
+
+// Is the user an owner OR player in a specific competition?
 function isLeagueMember(leagueId) {
   if (!leagueId) return false;
   if (isSuperAdmin()) return true;
-  const mem = APP.auth.memberships[leagueId];
-  return !!(mem && mem.role);  // any membership role qualifies
+  return !!(APP.auth.memberships[leagueId]);
 }
+
+// Does the user have OWNER access to a specific competition?
+function canEditCompetition(leagueId) {
+  if (isSuperAdmin()) return true;
+  const mem = APP.auth.memberships[leagueId];
+  return !!(mem && mem.role === 'owner');
+}
+
+// Can the user enter a score for a specific match?
+// True if: super admin, competition owner, or the linked player in the match
+function canEnterScore(entityA, entityB) {
+  if (!APP.activeLeagueId) return false;
+  if (canEditCompetition(APP.activeLeagueId)) return true;
+  const mem = APP.auth.memberships[APP.activeLeagueId];
+  if (!mem || mem.role !== 'player') return false;
+  return mem.playerId === entityA || mem.playerId === entityB;
+}
+
+// Kept for backward compat only — access is membership-based, not level-based
+const ROLES = { super_admin:4, competition_owner:3, player:2, public:1 };
+function roleLevel(r) { return ROLES[r] || 1; }
+
+// canEditCompetition, isLeagueMember, canEnterScore — defined in ROLE HELPERS above
 
 // Can user enter scores for a match (is one of the players in it)?
 function canEnterScore(matchEntityA, matchEntityB) {
@@ -1990,7 +2027,7 @@ function updateAuthChrome() {
   if (APP.auth.uid) {
     // Logged-in chip
     const initial = (APP.auth.displayName||'?')[0].toUpperCase();
-    const roleLabel = {super_admin:'Super Admin',competition_owner:'Owner',player:'Player',public:'Public'}[APP.auth.role]||'Player';
+    const roleLabel = {super_admin:'Super Admin',player:'Member',public:'Guest'}[APP.auth.role]||'Member';
     chipArea.innerHTML = `<div class="user-chip" onclick="toggleUserMenu()" id="user-chip">
       <div class="user-avatar">${APP.auth.photoURL?`<img src="${APP.auth.photoURL}" alt="">`:initial}</div>
       <span class="user-name">${esc(APP.auth.displayName)||''}</span>
@@ -2010,7 +2047,7 @@ function updateAuthChrome() {
     if (banner) {
       banner.style.display = '';
       banner.innerHTML = `<div class="auth-view-only">
-        <div class="auth-view-only-msg"><span class="icon">👁</span> Viewing as guest — sign in to manage competitions or enter scores</div>
+        <div class="auth-view-only-msg"><span class="icon">👁</span> Viewing as guest — sign in to create competitions, enrol as a player, or enter scores</div>
       </div>`;
     }
   }
@@ -2206,7 +2243,7 @@ async function signOut() {
 // ── PROFILE MODAL ──────────────────────────────────────────
 function openProfileModal() {
   document.getElementById('user-menu').style.display = 'none';
-  const roleLabel = {super_admin:'Super Admin',competition_owner:'Competition Owner',player:'Player'}[APP.auth.role]||'Player';
+  const roleLabel = APP.auth.role==='super_admin'?'Super Admin':'Member';
   openModal('My profile',
     `<div style="text-align:center;margin-bottom:20px">
       <div class="user-avatar" style="width:60px;height:60px;font-size:22px;margin:0 auto 10px">
@@ -2260,24 +2297,28 @@ async function openAdminPanel() {
   try {
     const snap = await db.collection('users').orderBy('createdAt','desc').limit(50).get();
     const users = snap.docs.map(d=>({id:d.id,...d.data()}));
-    const roles = ['super_admin','competition_owner','player'];
 
-    const rows = users.map(u=>`
-      <div class="user-table-row">
+    const rows = users.map(u=>{
+      const isSA = u.role === 'super_admin';
+      const memBadges = Object.entries(u.memberships||{}).map(([lid,m])=>{
+        const lg = APP.leagues.find(l=>l.id===lid);
+        return `<span class="badge badge-${m.role==='owner'?'completed':'scheduled'}" style="margin-right:4px;font-size:10px">${lg?esc(lg.name):lid}: ${m.role}</span>`;
+      }).join('') || '<span style="color:var(--ink-3);font-size:12px">No competitions</span>';
+      return `<div class="user-table-row">
         <div>
           <div style="font-weight:600;font-size:13px">${esc(u.displayName)||'—'}</div>
           <div style="font-size:11px;color:var(--ink-3)">${esc(u.email)||''}</div>
         </div>
-        <div style="font-size:12px;color:var(--ink-2)">
-          ${Object.entries(u.memberships||{}).map(([lid,m])=>`<span class="badge badge-${m.role==='owner'?'completed':'scheduled'}" style="margin-right:4px">${lid}: ${m.role}</span>`).join('')||'No competitions'}
-        </div>
+        <div style="font-size:12px">${memBadges}</div>
         <div>
-          <select style="font-size:12px;padding:4px 6px" onchange="changeUserRole('${u.id}',this.value)">
-            ${roles.map(r=>`<option value="${r}" ${u.role===r?'selected':''}>${r.replace('_',' ')}</option>`).join('')}
+          <select style="font-size:12px;padding:4px 6px" data-uid="${u.id}" onchange="changeUserRole('${u.id}',this.value)">
+            <option value="player"      ${!isSA?'selected':''}>Member</option>
+            <option value="super_admin" ${isSA?'selected':''}>Super Admin</option>
           </select>
         </div>
         <div style="font-size:11px;color:var(--ink-3)">${(u.createdAt||'').slice(0,10)}</div>
-      </div>`).join('');
+      </div>`;
+    }).join('');
 
     document.getElementById('modal-body').innerHTML = `
       <div class="user-table-hd">
@@ -2989,10 +3030,9 @@ function renderUserManagement() {
   });
 
   // Stats
-  const total  = _allUsers.length;
-  const admins = _allUsers.filter(u=>u.role==='super_admin').length;
-  const owners = _allUsers.filter(u=>u.role==='competition_owner').length;
-  const players= _allUsers.filter(u=>u.role==='player'||!u.role).length;
+  const total   = _allUsers.length;
+  const admins  = _allUsers.filter(u=>u.role==='super_admin').length;
+  const members = _allUsers.filter(u=>u.role!=='super_admin').length;
 
   const roleLabels = {
     super_admin: 'Super Admin',
@@ -3002,8 +3042,8 @@ function renderUserManagement() {
 
   const cards = filtered.map(u => {
     const initial = (u.displayName||u.email||'?')[0].toUpperCase();
-    const role = u.role || 'player';
-    const roleLabel = roleLabels[role] || role;
+    const role = u.role === 'super_admin' ? 'super_admin' : 'player';
+    const roleLabel = role === 'super_admin' ? 'Super Admin' : 'Member';
     const joined = u.createdAt ? u.createdAt.slice(0,10) : '—';
     const isSelf = u.id === APP.auth.uid;
 
@@ -3060,8 +3100,7 @@ function renderUserManagement() {
     <div class="um-stats">
       <div class="um-stat"><div class="um-stat-val">${total}</div><div class="um-stat-lbl">Total users</div></div>
       <div class="um-stat"><div class="um-stat-val" style="color:var(--gold)">${admins}</div><div class="um-stat-lbl">Super Admins</div></div>
-      <div class="um-stat"><div class="um-stat-val" style="color:var(--blue)">${owners}</div><div class="um-stat-lbl">Owners</div></div>
-      <div class="um-stat"><div class="um-stat-val" style="color:var(--green)">${players}</div><div class="um-stat-lbl">Players</div></div>
+      <div class="um-stat"><div class="um-stat-val" style="color:var(--green)">${members}</div><div class="um-stat-lbl">Members</div></div>
     </div>
 
     <!-- Toolbar -->
@@ -3078,8 +3117,7 @@ function renderUserManagement() {
       <div class="um-filter-tabs">
         <button class="um-filter-tab ${roleFilter==='all'?'active':''}" onclick="APP.umFilter='all';render()">All</button>
         <button class="um-filter-tab ${roleFilter==='super_admin'?'active':''}" onclick="APP.umFilter='super_admin';render()">Super Admin</button>
-        <button class="um-filter-tab ${roleFilter==='competition_owner'?'active':''}" onclick="APP.umFilter='competition_owner';render()">Owner</button>
-        <button class="um-filter-tab ${roleFilter==='player'?'active':''}" onclick="APP.umFilter='player';render()">Player</button>
+        <button class="um-filter-tab ${roleFilter==='player'?'active':''}" onclick="APP.umFilter='player';render()">Member</button>
       </div>
       <button class="btn btn-ghost btn-sm" onclick="loadAllUsers(true)">↻ Refresh</button>
     </div>
@@ -3127,29 +3165,24 @@ function openEditUser(uid) {
     </div>
 
     <div class="form-field" style="margin-bottom:12px">
-      <label>Role</label>
+      <label>System role</label>
       <div class="toggle-group" style="margin-top:5px">
         <div class="tog ${(u.role||'player')==='super_admin'?'on':''}"
           data-role="super_admin"
           onclick="setEditRole('super_admin',this)">
           🛡️ Super Admin
         </div>
-        <div class="tog ${(u.role||'player')==='competition_owner'?'on':''}"
-          data-role="competition_owner"
-          onclick="setEditRole('competition_owner',this)">
-          🏆 Owner
-        </div>
-        <div class="tog ${(u.role||'player')==='player'?'on':''}"
+        <div class="tog ${(u.role||'player')!=='super_admin'?'on':''}"
           data-role="player"
           onclick="setEditRole('player',this)">
-          🎱 Player
+          🎱 Member
         </div>
       </div>
-      ${isSelf
-        ? `<div style="font-size:11px;color:var(--ink-3);margin-top:6px">
-            You can change your own role, but not if you are the only Super Admin.
-           </div>`
-        : ''}
+      <div style="font-size:11px;color:var(--ink-3);margin-top:6px;line-height:1.5">
+        <strong>Super Admin</strong> — full access to everything.<br>
+        <strong>Member</strong> — can create competitions (becoming owner) and be enrolled as a player.<br>
+        ${isSelf?'You can change your own role, but not if you are the only Super Admin.':'Competition ownership is managed via each competition Members settings.'}
+      </div>
     </div>
 
     <input type="hidden" id="eu-role" value="${u.role||'player'}">
@@ -3207,6 +3240,7 @@ function setEditRole(role, el) {
 
 async function saveEditUser(uid) {
   const name = document.getElementById('eu-name').value.trim();
+  // System roles: 'super_admin' or 'player' (membership-based ownership replaces 'competition_owner')
   const role = document.getElementById('eu-role').value;
   const isSelf = uid === APP.auth.uid;
 
@@ -3511,7 +3545,9 @@ function renderHub() {
   return `
   <div class="hub-header">
     <div class="hub-title"><span class="ball">🎱</span> My Competitions</div>
-    <button class="btn btn-primary btn-sm" onclick="openCreateLeague()">+ New competition</button>
+    ${isLoggedIn()
+      ? `<button class="btn btn-primary btn-sm" onclick="openCreateLeague()">+ New competition</button>`
+      : `<button class="btn btn-ghost btn-sm" onclick="showAuthScreen()">Sign in to create</button>`}
   </div>
 
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px">
@@ -5918,7 +5954,9 @@ async function saveAddBracketPlayer() {
 
 function openCreateLeague() {
   if (!isLoggedIn()) { showAuthScreen(); return; }
-  if (!isOwner())    { toast('Only Competition Owners or Super Admins can create competitions'); return; }
+  // Any logged-in user can create a competition — they automatically become the owner.
+  // Super admins can promote users to 'competition_owner' for a cleaner role structure,
+  // but it's not required to create competitions.
   openModal('New competition',
     `<div class="form-row c2">
       <div class="form-field"><label>League name *</label><input id="nl-name" placeholder="e.g. Summer League 2025" autofocus></div>
