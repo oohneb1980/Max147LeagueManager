@@ -930,6 +930,36 @@ tbody tr:nth-child(n+6){ animation-delay: 100ms;}
   .gs-qualifiers { grid-template-columns: 1fr 1fr; }
 }
 
+
+/* ── USER PICKER (add player from members) ───────────────── */
+.upick-search {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--bg-raised); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 0 10px; height: 36px; margin-bottom: 10px;
+}
+.upick-search input { flex:1; background:none; border:none; font-size:13px; color:var(--ink); }
+.upick-search input:focus { outline: none; }
+.upick-list { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+.upick-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border-radius: var(--r);
+  background: var(--bg-raised); border: 1px solid var(--border);
+  cursor: pointer; transition: border-color 120ms ease;
+}
+.upick-row:hover { border-color: var(--border-2); }
+.upick-row.selected { border-color: var(--gold); background: var(--gold-muted); }
+.upick-avatar {
+  width: 32px; height: 32px; border-radius: 50%;
+  background: var(--bg-card); border: 1px solid var(--border-2);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700; color: var(--gold); flex-shrink: 0;
+}
+.upick-info { flex: 1; min-width: 0; }
+.upick-name { font-size: 13px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.upick-email { font-size: 11px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.upick-badge { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 20px; background: rgba(63,191,122,.13); color: var(--green); flex-shrink: 0; }
+.upick-badge.already { background: rgba(107,99,80,.15); color: var(--ink-3); }
+.upick-divider { font-size: 11px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: .06em; padding: 10px 0 4px; }
 /* ── IMPORT / EXPORT ─────────────────────────────────────── */
 .import-zone {
   border: 2px dashed var(--border-2);
@@ -3795,10 +3825,11 @@ function renderHighBreaks() {
   return `
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
     <div class="sec-title" style="margin:0">High breaks</div>
+    ${canEditCompetition(APP.activeLeagueId)?`
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn btn-ghost btn-sm" onclick="openConfigBreakThreshold()">⚙️ Set threshold</button>
       <button class="btn btn-primary btn-sm" onclick="openAddBreak()">+ Log break</button>
-    </div>
+    </div>`:''}
   </div>
 
   <div class="summary-bar" style="margin-bottom:20px">
@@ -3862,12 +3893,13 @@ function renderFixtures() {
 
   const needsDetails = APP.matches.filter(m=>m.status==='scheduled'&&(!m.date||!m.venue||m.venue==='TBD')).length;
 
+  const canManageFix = canEditCompetition(APP.activeLeagueId);
   let html=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:${needsDetails?'10px':'18px'};flex-wrap:wrap;gap:10px">
     <div class="sec-title" style="margin:0">Match fixtures</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
+    ${canManageFix?`<div style="display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn btn-ghost btn-sm" onclick="openRRModal()">⚙️ Generate fixtures</button>
       <button class="btn btn-primary btn-sm" onclick="openAddMatch()">+ Add match</button>
-    </div>
+    </div>`:''}
   </div>
   ${needsDetails?`<div class="alert alert-warn" style="margin-bottom:18px">⚠ ${needsDetails} fixture${needsDetails!==1?'s are':' is'} missing a date or venue. Click <strong>📅 Set details</strong> on each to fill them in.</div>`:''}`;
 
@@ -3884,14 +3916,14 @@ function renderFixtures() {
       const incomplete = (missingDate||missingVenue) && m.status==='scheduled';
 
       // Date display — editable inline for scheduled/live
-      const dateEl = (m.status==='scheduled'||m.status==='live')
+      // Inline editable fields — owners only; players see read-only display
+      const dateEl = (m.status==='scheduled'||m.status==='live') && canManageFix
         ? `<span class="fixture-inline-field ${missingDate?'missing':''}" onclick="inlineEditDate('${m.id}',this)" title="Click to set date">
             📅 ${missingDate?'<span style="color:var(--amber)">Set date</span>':m.date}
            </span>`
         : (m.date?`<span style="font-size:12px;color:var(--ink-2)">📅 ${m.date}</span>`:'');
 
-      // Venue display — editable inline for scheduled/live
-      const venueEl = (m.status==='scheduled'||m.status==='live')
+      const venueEl = (m.status==='scheduled'||m.status==='live') && canManageFix
         ? `<span class="fixture-inline-field ${missingVenue?'missing':''}" onclick="inlineEditVenue('${m.id}',this,'${allVenues.join('|')}')" title="Click to set venue">
             📍 ${missingVenue?'<span style="color:var(--amber)">Set venue</span>':m.venue}
            </span>`
@@ -3915,14 +3947,14 @@ function renderFixtures() {
           ?`<div class="hb-note" style="margin-top:8px">High breaks: ${aName} <span>${m.highBreakA||0}</span> &nbsp;·&nbsp; ${bName} <span>${m.highBreakB||0}</span>${fl?` &nbsp;·&nbsp;<a href="#" onclick="openFrameLog('${m.id}');return false" style="color:var(--gold);font-size:11px">View frame log</a>`:''}</div>`
           :''}
         <div class="match-foot">
-          ${m.status!=='completed'?`<button class="btn btn-primary btn-xs" onclick="openScoreEntry('${m.id}')">Enter score</button>`:''}
-          ${m.status==='scheduled'?`<button class="btn btn-ghost btn-xs" onclick="openEditFixture('${m.id}')">📅 Set details</button>`:''}
-          ${m.status==='scheduled'?`<button class="btn btn-ghost btn-xs" onclick="setStatus('${m.id}','live')">▶ Mark live</button>`:''}
-          ${m.status==='live'?`<button class="btn btn-ghost btn-xs" onclick="openEditFixture('${m.id}')">📅 Edit details</button>`:''}
-          ${m.status==='live'?`<button class="btn btn-ghost btn-xs" onclick="openSyncModal('${m.id}')">🔗 Sync Max147</button>`:''}
-          ${m.status==='completed'?`<button class="btn btn-ghost btn-xs" onclick="openScoreEntry('${m.id}')">✏️ Edit score</button>`:''}
-          ${m.status==='completed'?`<button class="btn btn-ghost btn-xs" onclick="openEditFixture('${m.id}')">📅 Edit details</button>`:''}
-          <button class="btn btn-danger btn-xs" onclick="delMatch('${m.id}')">Remove</button>
+          ${canEnterScore(m.entityA,m.entityB)&&m.status!=='completed'?`<button class="btn btn-primary btn-xs" onclick="openScoreEntry('${m.id}')">Enter score</button>`:''}
+          ${canManageFix&&m.status==='scheduled'?`<button class="btn btn-ghost btn-xs" onclick="openEditFixture('${m.id}')">📅 Set details</button>`:''}
+          ${canManageFix&&m.status==='scheduled'?`<button class="btn btn-ghost btn-xs" onclick="setStatus('${m.id}','live')">▶ Mark live</button>`:''}
+          ${canManageFix&&m.status==='live'?`<button class="btn btn-ghost btn-xs" onclick="openEditFixture('${m.id}')">📅 Edit details</button>`:''}
+          ${canManageFix&&m.status==='live'?`<button class="btn btn-ghost btn-xs" onclick="openSyncModal('${m.id}')">🔗 Sync Max147</button>`:''}
+          ${canManageFix&&m.status==='completed'?`<button class="btn btn-ghost btn-xs" onclick="openScoreEntry('${m.id}')">✏️ Edit score</button>`:''}
+          ${canManageFix&&m.status==='completed'?`<button class="btn btn-ghost btn-xs" onclick="openEditFixture('${m.id}')">📅 Edit details</button>`:''}
+          ${canManageFix?`<button class="btn btn-danger btn-xs" onclick="delMatch('${m.id}')">Remove</button>`:''}
         </div>
       </div>`;
     });
@@ -3934,6 +3966,7 @@ function renderFixtures() {
 
 // ── EDIT FIXTURE MODAL (date + venue + status) ─────────────
 function openEditFixture(matchId) {
+  if (!canEditCompetition(APP.activeLeagueId)) { toast("You don't have permission"); return; }
   const m = APP.matches.find(x=>x.id===matchId);
   const aName = getName(m.entityA), bName = getName(m.entityB);
 
@@ -4003,6 +4036,7 @@ async function saveFixtureDetails(matchId) {
 
 // ── INLINE EDITING (click-in-place on card) ────────────────
 function inlineEditDate(matchId, el) {
+  if (!canEditCompetition(APP.activeLeagueId)) return;
   const m = APP.matches.find(x=>x.id===matchId);
   const input = document.createElement('input');
   input.type  = 'date';
@@ -4025,6 +4059,7 @@ function inlineEditDate(matchId, el) {
 }
 
 function inlineEditVenue(matchId, el, venueListStr) {
+  if (!canEditCompetition(APP.activeLeagueId)) return;
   const m = APP.matches.find(x=>x.id===matchId);
   const venues = venueListStr ? venueListStr.split('|').filter(Boolean) : [];
 
@@ -6224,6 +6259,7 @@ async function deleteLeague(id){
 }
 
 async function saveLeagueConfig(){
+  if (!canEditCompetition(APP.activeLeagueId)) { toast("You don't have permission to change settings"); return; }
   const lg=APP.leagues.find(l=>l.id===APP.activeLeagueId);
   if(!lg)return;
   Object.assign(lg, APP.config);
@@ -6233,27 +6269,176 @@ async function saveLeagueConfig(){
 }
 
 // ── PARTICIPANT MODALS ────────────────────────────────────
-function openAddPlayer(){
-  openModal('Add player',
-    `<div class="form-row"><div class="form-field"><label>Name *</label><input id="mp-name" placeholder="Player name" autofocus></div></div>
+// ── ADD PLAYER — from registered members or manually ─────────
+// _pickedUid tracks the selected user account (null = manual entry)
+window._pickedUid = null;
+
+function openAddPlayer(teamId=null) {
+  if (!canEditCompetition(APP.activeLeagueId)) { toast("You don't have permission"); return; }
+  window._pickedUid = null;
+  window._addPlayerTeamId = teamId || null;
+
+  // Build member list — users who have signed up
+  // Load from _allUsers cache if available, else fetch
+  _renderAddPlayerModal([]);
+  if (db) {
+    db.collection('users').orderBy('displayName').get({ source: 'server' })
+      .then(snap => {
+        const users = snap.docs.map(d => ({id:d.id,...d.data()}));
+        _renderAddPlayerModal(users);
+      })
+      .catch(() => _renderAddPlayerModal([]));
+  }
+}
+
+function _renderAddPlayerModal(users) {
+  // Which users are already in this competition?
+  const existingEmails = new Set(APP.players.map(p=>(p.contact||'').toLowerCase().trim()).filter(Boolean));
+  const existingUids   = new Set(APP.players.map(p=>p.uid).filter(Boolean));
+
+  const rows = users.map(u => {
+    const already = existingUids.has(u.id) || existingEmails.has((u.email||'').toLowerCase());
+    return { u, already };
+  });
+
+  const listHtml = rows.length ? rows.map(({u, already}) => {
+    const clickHandler = already ? '' : `onclick="pickUser('${u.id}')"`;
+    const initial = (u.displayName||u.email||'?')[0].toUpperCase();
+    return `<div class="upick-row" id="upick-${u.id}" ${clickHandler} style="${already?'opacity:.6;cursor:default':'cursor:pointer'}">
+      <div class="upick-avatar">${initial}</div>
+      <div class="upick-info">
+        <div class="upick-name">${esc(u.displayName||'—')}</div>
+        <div class="upick-email">${esc(u.email||'')}</div>
+      </div>
+      <span class="upick-badge ${already?'already':''}">${already?'Already added':'+ Select'}</span>
+    </div>`;
+  }).join('')
+    : '<div style="color:var(--ink-3);font-size:13px;padding:8px 0">No registered members found. Add players manually below.</div>';
+
+  const body = `
+    <div style="margin-bottom:14px;font-size:13px;color:var(--ink-2)">
+      Select a registered member, or add a player manually below.
+    </div>
+
+    <div class="upick-search">
+      <span style="color:var(--ink-3)">🔍</span>
+      <input id="upick-search" placeholder="Search by name or email…"
+        oninput="filterUserPicker(this.value)">
+    </div>
+    <div class="upick-list" id="upick-list">${listHtml}</div>
+
+    <div class="upick-divider">Or add manually</div>
+    <div class="form-row"><div class="form-field">
+      <label>Name *</label>
+      <input id="mp-name" placeholder="Player name (for non-registered players)">
+    </div></div>
     <div class="form-row c2">
-      <div class="form-field"><label>Contact</label><input id="mp-contact" placeholder="email / phone"></div>
-      <div class="form-field"><label>Handicap</label><input id="mp-hc" type="number" value="0" min="0" max="147"></div>
-    </div>`,
+      <div class="form-field"><label>Email / contact</label>
+        <input id="mp-contact" placeholder="email or phone"></div>
+      <div class="form-field"><label>Handicap</label>
+        <input id="mp-hc" type="number" value="0" min="0" max="147"></div>
+    </div>
+    <div id="mp-selected-note" style="display:none;margin-top:8px;padding:8px 12px;background:var(--gold-muted);border-radius:var(--r);font-size:12px;color:var(--gold)">
+      ✓ Member selected — name and email filled from their profile
+    </div>`;
+
+  openModal('Add player', body,
     `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
      <button class="btn btn-primary" onclick="savePlayer()">Add player</button>`
   );
 }
-async function savePlayer(teamId=null){
-  const name=document.getElementById('mp-name').value.trim(); if(!name)return;
-  const p={id:genId(),name,contact:document.getElementById('mp-contact').value.trim(),handicap:+document.getElementById('mp-hc').value||0};
+
+function pickUser(uid) {
+  // Deselect previous
+  document.querySelectorAll('.upick-row.picked').forEach(r => {
+    r.classList.remove('picked','selected');
+    const b = r.querySelector('.upick-badge');
+    if (b) { b.textContent='Select'; b.classList.remove('already'); }
+  });
+
+  window._pickedUid = uid;
+  const row = document.getElementById('upick-'+uid);
+  if (row) { row.classList.add('picked','selected'); }
+
+  // Find the user and fill in the form
+  if (db) {
+    db.collection('users').doc(uid).get()
+      .then(d => {
+        if (!d.exists) return;
+        const u = d.data();
+        const nameEl = document.getElementById('mp-name');
+        const contactEl = document.getElementById('mp-contact');
+        if (nameEl) nameEl.value = u.displayName || '';
+        if (contactEl) contactEl.value = u.email || '';
+        const note = document.getElementById('mp-selected-note');
+        if (note) note.style.display = '';
+      });
+  }
+}
+
+function filterUserPicker(query) {
+  const q = query.toLowerCase();
+  document.querySelectorAll('#upick-list .upick-row').forEach(row => {
+    const text = row.textContent.toLowerCase();
+    row.style.display = text.includes(q) ? '' : 'none';
+  });
+}
+
+async function savePlayer(teamId=null) {
+  const resolvedTeamId = teamId || window._addPlayerTeamId;
+  const name    = document.getElementById('mp-name')?.value.trim();
+  const contact = document.getElementById('mp-contact')?.value.trim() || '';
+  const hc      = +(document.getElementById('mp-hc')?.value) || 0;
+
+  if (!name) { toast('Player name is required'); return; }
+
+  // Check for duplicate name in this competition
+  if (APP.players.some(p => p.name.toLowerCase() === name.toLowerCase())) {
+    toast('A player with this name already exists'); return;
+  }
+
+  const pid = genId();
+  const p = {
+    id: pid,
+    name,
+    contact,
+    handicap: Math.round(hc),
+    uid: window._pickedUid || null,  // link to user account if selected
+  };
+
   APP.players.push(p);
-  if(teamId){const t=APP.teams.find(t=>t.id===teamId);if(t)t.players.push(p.id);APP.openTeams[teamId]=true;}
-  await persistInLeague('players',p.id,p);
-  closeModal(); toast('Player added ✓'); render();
+  if (resolvedTeamId) {
+    const t = APP.teams.find(t=>t.id===resolvedTeamId);
+    if (t) { t.players.push(pid); APP.openTeams[resolvedTeamId]=true; }
+  }
+
+  await persistInLeague('players', pid, p);
+
+  // If linked to a real user, create/update their member record
+  if (p.uid && db && APP.activeLeagueId) {
+    try {
+      const memData = {
+        uid: p.uid,
+        role: 'player',
+        playerId: pid,
+        displayName: name,
+        email: contact,
+      };
+      await db.collection('leagues').doc(APP.activeLeagueId)
+        .collection('members').doc(p.uid).set(memData, { merge: true });
+    } catch(e) {
+      console.warn('Could not create member record:', e.message);
+    }
+  }
+
+  window._pickedUid = null;
+  closeModal();
+  toast('Player added ✓');
+  render();
 }
 
 function openAddTeam(){
+  if(!canEditCompetition(APP.activeLeagueId)){toast("You don't have permission");return;}
   openModal('Add team',
     `<div class="form-row"><div class="form-field"><label>Team name *</label><input id="mt-name" placeholder="Team name" autofocus></div></div>
     <div class="form-row"><div class="form-field"><label>Home venue</label><input id="mt-venue" placeholder="Home venue"></div></div>`,
@@ -6305,6 +6490,7 @@ async function addPlayerToTeam(teamId){
 
 // ── MATCH MODALS ──────────────────────────────────────────
 function openAddMatch(){
+  if(!canEditCompetition(APP.activeLeagueId)){toast("You don't have permission");return;}
   if (!canEditCompetition(APP.activeLeagueId)) { toast("You don't have permission to add matches"); return; }
   const isTeam=APP.config.format==='team';
   const ents=isTeam?APP.teams:APP.players;
@@ -6401,6 +6587,7 @@ function openScoreEntry(matchId){
 }
 
 async function saveScore(matchId){
+  if(!canEnterScore(APP.matches.find(m=>m.id===matchId)?.entityA, APP.matches.find(m=>m.id===matchId)?.entityB)){toast("You don't have permission");return;}
   const m=APP.matches.find(x=>x.id===matchId);
   m.scoreA=+document.getElementById('es-sa').value;
   m.scoreB=+document.getElementById('es-sb').value;
@@ -6466,6 +6653,7 @@ async function doSync(matchId){
 }
 
 function openRRModal(){
+  if (!canEditCompetition(APP.activeLeagueId)) { toast("You don't have permission to generate fixtures"); return; }
   const isTeam=APP.config.format==='team';
   const pool=isTeam?APP.teams:APP.players;
   if(pool.length<2){toast(`Need at least 2 ${isTeam?'teams':'players'}`);return;}
@@ -6632,9 +6820,9 @@ async function delBreak(id) {
 }
 
 // ── ACTIONS ───────────────────────────────────────────────
-async function setStatus(id,status){const m=APP.matches.find(m=>m.id===id);m.status=status;await persistInLeague('matches',id,m);toast(`Marked as ${status}`);render();}
-async function delMatch(id){if(!confirm('Remove this match?'))return;APP.matches=APP.matches.filter(m=>m.id!==id);await deleteInLeague('matches',id);toast('Match removed');render();}
-async function delPlayer(id){if(!confirm('Remove player?'))return;APP.players=APP.players.filter(p=>p.id!==id);APP.teams.forEach(t=>{t.players=(t.players||[]).filter(x=>x!==id);});await deleteInLeague('players',id);toast('Player removed');render();}
+async function setStatus(id,status){if(!canEditCompetition(APP.activeLeagueId)){toast("No permission");return;}const m=APP.matches.find(m=>m.id===id);m.status=status;await persistInLeague('matches',id,m);toast(`Marked as ${status}`);render();}
+async function delMatch(id){if(!canEditCompetition(APP.activeLeagueId)){toast("No permission");return;}if(!confirm('Remove this match?'))return;APP.matches=APP.matches.filter(m=>m.id!==id);await deleteInLeague('matches',id);toast('Match removed');render();}
+async function delPlayer(id){if(!canEditCompetition(APP.activeLeagueId)){toast("No permission");return;}if(!confirm('Remove player?'))return;APP.players=APP.players.filter(p=>p.id!==id);APP.teams.forEach(t=>{t.players=(t.players||[]).filter(x=>x!==id);});await deleteInLeague('players',id);toast('Player removed');render();}
 async function delTeam(id){if(!confirm('Remove team?'))return;APP.teams=APP.teams.filter(t=>t.id!==id);await deleteInLeague('teams',id);toast('Team removed');render();}
 async function removeFromTeam(teamId,pid){const t=APP.teams.find(t=>t.id===teamId);t.players=(t.players||[]).filter(p=>p!==pid);await persistInLeague('teams',teamId,t);APP.openTeams[teamId]=true;toast('Player removed');render();}
 function testFb(){if(!db){toast('Firebase not initialised');return;}db.collection(LEAGUES_COL).limit(1).get().then(()=>toast('Firebase OK ✓')).catch(e=>toast('Failed: '+e.message));}
