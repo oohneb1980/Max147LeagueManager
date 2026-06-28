@@ -2968,7 +2968,7 @@ function render() {
     if (isKnockout)        main.innerHTML=renderBracket();
     else if (isGroupStage) main.innerHTML=renderGroupStandings();  // group standings only
     else                   main.innerHTML=renderDashboard();
-    if (isKnockout) requestAnimationFrame(()=>drawBracketLines());
+    if (isKnockout) requestAnimationFrame(()=>{ try { drawBracketLines(); } catch(e){ console.warn('drawBracketLines:',e.message); } });
     return;
   }
 
@@ -2988,7 +2988,7 @@ function render() {
       main.innerHTML = renderAccessDenied('You need to be enrolled in this competition to view fixtures.');
     } else if (isGroupStage) {
       main.innerHTML = renderGroupFixtures();  // group matches + setup + knockout
-      requestAnimationFrame(()=>drawBracketLines());
+      requestAnimationFrame(()=>{ try { drawBracketLines(); } catch(e){ console.warn('drawBracketLines:',e.message); } });
     } else {
       main.innerHTML = renderFixtures();
     }
@@ -5317,7 +5317,7 @@ async function generateKnockout() {
   APP.gsPhase = 'knockout';
   toast('Knockout bracket generated ✓');
   render();
-  requestAnimationFrame(()=>drawBracketLines());
+  requestAnimationFrame(()=>{ try { drawBracketLines(); } catch(e){ console.warn('drawBracketLines:',e.message); } });
 }
 
 // ── GROUP MATCH SCORE ENTRY ────────────────────────────────
@@ -5566,48 +5566,50 @@ function renderBracketMatch(m, opts={}) {
 function drawBracketLines() {
   const svg = document.getElementById('bracket-svg-w');
   if (!svg) return;
+  const svgCanvas = svg.closest('.bracket-canvas');
+  if (!svgCanvas) return;  // SVG not inside bracket-canvas yet — bail
 
-  // Clear existing lines
   svg.innerHTML = '';
 
   const rounds = buildBracketRounds('W');
-  for (let r=0; r<rounds.length-1; r++) {
-    const curRound = rounds[r];
-    const nextRound = rounds[r+1];
-    // Each pair in current round feeds one match in next round
-    for (let i=0; i<nextRound.length; i++) {
-      const topMatch  = curRound[i*2];
-      const botMatch  = curRound[i*2+1];
+  for (let r = 0; r < rounds.length - 1; r++) {
+    const curRound  = rounds[r];
+    const nextRound = rounds[r + 1];
+    for (let i = 0; i < nextRound.length; i++) {
+      const topMatch  = curRound[i * 2];
+      const botMatch  = curRound[i * 2 + 1];
       const nextMatch = nextRound[i];
       if (!topMatch || !nextMatch) continue;
 
-      const topEl  = document.getElementById('bm-'+topMatch.id);
-      const botEl  = botMatch ? document.getElementById('bm-'+botMatch.id) : null;
-      const nextEl = document.getElementById('bm-'+nextMatch.id);
-      const svgEl  = svg;
+      const topEl  = document.getElementById('bm-' + topMatch.id);
+      const nextEl = document.getElementById('bm-' + nextMatch.id);
+      const botEl  = botMatch ? document.getElementById('bm-' + botMatch.id) : null;
 
+      // Guard every element — any null means this connector can't be drawn
       if (!topEl || !nextEl) continue;
+      const svgRect  = svgCanvas.getBoundingClientRect();
+      if (!svgRect || !svgRect.width) continue;  // not visible yet
 
-      const svgRect  = svgEl.closest('.bracket-canvas').getBoundingClientRect();
       const topRect  = topEl.getBoundingClientRect();
       const nextRect = nextEl.getBoundingClientRect();
 
-      const x1 = topRect.right  - svgRect.left;
-      const y1 = topRect.top + topRect.height/2 - svgRect.top;
-      const x2 = nextRect.left  - svgRect.left;
-      const y2 = nextRect.top + nextRect.height/2 - svgRect.top;
-      const midX = x1 + (x2-x1)*0.5;
+      const x1   = topRect.right  - svgRect.left;
+      const y1   = topRect.top + topRect.height / 2 - svgRect.top;
+      const x2   = nextRect.left  - svgRect.left;
+      const y2   = nextRect.top + nextRect.height / 2 - svgRect.top;
+      const midX = x1 + (x2 - x1) * 0.5;
 
-      // Line from top match right edge → mid → next match left edge
-      const path = `M${x1},${y1} L${midX},${y1} L${midX},${y2} L${x2},${y2}`;
-      svg.innerHTML += `<path d="${path}" stroke="rgba(201,168,76,0.25)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`;
+      svg.innerHTML += `<path d="M${x1},${y1} L${midX},${y1} L${midX},${y2} L${x2},${y2}"
+        stroke="rgba(201,168,76,0.25)" stroke-width="1.5" fill="none"
+        stroke-linecap="round" stroke-linejoin="round"/>`;
 
       if (botEl) {
         const botRect = botEl.getBoundingClientRect();
         const xb1 = botRect.right - svgRect.left;
-        const yb1 = botRect.top + botRect.height/2 - svgRect.top;
-        const pathB = `M${xb1},${yb1} L${midX},${yb1} L${midX},${y2}`;
-        svg.innerHTML += `<path d="${pathB}" stroke="rgba(201,168,76,0.25)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`;
+        const yb1 = botRect.top + botRect.height / 2 - svgRect.top;
+        svg.innerHTML += `<path d="M${xb1},${yb1} L${midX},${yb1} L${midX},${y2}"
+          stroke="rgba(201,168,76,0.25)" stroke-width="1.5" fill="none"
+          stroke-linecap="round" stroke-linejoin="round"/>`;
       }
     }
   }
@@ -5615,34 +5617,47 @@ function drawBracketLines() {
   // Losers bracket lines
   const svgL = document.getElementById('bracket-svg-l');
   if (!svgL) return;
+  const svgLCanvas = svgL.closest('.bracket-canvas');
+  if (!svgLCanvas) return;
+
   svgL.innerHTML = '';
   const lRounds = buildBracketRounds('L');
-  for (let r=0; r<lRounds.length-1; r++) {
-    const curRound = lRounds[r];
-    const nextRound = lRounds[r+1];
-    for (let i=0; i<nextRound.length; i++) {
-      const topMatch  = curRound[i*2];
-      const botMatch  = curRound[i*2+1];
+  for (let r = 0; r < lRounds.length - 1; r++) {
+    const curRound  = lRounds[r];
+    const nextRound = lRounds[r + 1];
+    for (let i = 0; i < nextRound.length; i++) {
+      const topMatch  = curRound[i * 2];
+      const botMatch  = curRound[i * 2 + 1];
       const nextMatch = nextRound[i];
       if (!topMatch || !nextMatch) continue;
-      const topEl  = document.getElementById('bm-'+topMatch.id);
-      const botEl  = botMatch ? document.getElementById('bm-'+botMatch.id) : null;
-      const nextEl = document.getElementById('bm-'+nextMatch.id);
+
+      const topEl  = document.getElementById('bm-' + topMatch.id);
+      const nextEl = document.getElementById('bm-' + nextMatch.id);
+      const botEl  = botMatch ? document.getElementById('bm-' + botMatch.id) : null;
+
       if (!topEl || !nextEl) continue;
-      const svgRect  = svgL.closest('.bracket-canvas').getBoundingClientRect();
+      const svgRect  = svgLCanvas.getBoundingClientRect();
+      if (!svgRect || !svgRect.width) continue;
+
       const topRect  = topEl.getBoundingClientRect();
       const nextRect = nextEl.getBoundingClientRect();
       const x1   = topRect.right  - svgRect.left;
-      const y1   = topRect.top + topRect.height/2 - svgRect.top;
+      const y1   = topRect.top + topRect.height / 2 - svgRect.top;
       const x2   = nextRect.left  - svgRect.left;
-      const y2   = nextRect.top + nextRect.height/2 - svgRect.top;
-      const midX = x1 + (x2-x1)*0.5;
-      svgL.innerHTML += `<path d="M${x1},${y1} L${midX},${y1} L${midX},${y2} L${x2},${y2}" stroke="rgba(224,82,82,0.25)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`;
+      const y2   = nextRect.top + nextRect.height / 2 - svgRect.top;
+      const midX = x1 + (x2 - x1) * 0.5;
+
+      svgL.innerHTML += `<path d="M${x1},${y1} L${midX},${y1} L${midX},${y2} L${x2},${y2}"
+        stroke="rgba(224,82,82,0.25)" stroke-width="1.5" fill="none"
+        stroke-linecap="round" stroke-linejoin="round"/>`;
+
       if (botEl) {
         const botRect = botEl.getBoundingClientRect();
         const xb1 = botRect.right - svgRect.left;
-        const yb1 = botRect.top + botRect.height/2 - svgRect.top;
-        svgL.innerHTML += `<path d="M${xb1},${yb1} L${midX},${yb1} L${midX},${y2}" stroke="rgba(224,82,82,0.25)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`;
+        const yb1 = botRect.top + botRect.height / 2 - svgRect.top;
+        svgL.innerHTML += `<path d="M${xb1},${yb1} L${midX},${yb1} L${midX},${y2}"
+          stroke="rgba(224,82,82,0.25)" stroke-width="1.5" fill="none"
+          stroke-linecap="round" stroke-linejoin="round"/>`;
       }
     }
   }
