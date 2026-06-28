@@ -60,9 +60,9 @@
   /* Z-index scale */
   --z-sticky: 10;
   --z-dropdown: 100;
-  --z-modal-bg: 200;
-  --z-modal: 210;
-  --z-toast: 300;
+  --z-modal-bg: 1100;
+  --z-modal: 1110;
+  --z-toast: 1200;
 
   /* Emil easing curves — strong, intentional */
   --ease-out:     cubic-bezier(0.23, 1, 0.32, 1);
@@ -1889,6 +1889,9 @@ function isPlayer() {
 // Is the user an owner of ANY competition, or a super admin?
 function isOwner() {
   if (isSuperAdmin()) return true;
+  // Handle legacy competition_owner system role
+  if (APP.auth.role === 'competition_owner') return true;
+  // Check per-competition memberships
   return Object.values(APP.auth.memberships || {}).some(m => m.role === 'owner');
 }
 
@@ -1949,6 +1952,7 @@ function initAuth() {
     }
     APP.auth.loading = false;
     hideAuthLoading();
+    if (user) hideAuthScreen();   // ← always hide auth screen when signed in
     updateAuthChrome();
     render();
     // If inside a league, re-evaluate tab visibility after auth resolves
@@ -2078,7 +2082,8 @@ function showAuthScreen(step='choose') {
 }
 
 function hideAuthScreen() {
-  document.getElementById('auth-screen').style.display = 'none';
+  const el = document.getElementById('auth-screen');
+  if (el) { el.style.display = 'none'; el.style.zIndex = ''; }
   authStep = 'choose';
 }
 
@@ -2351,6 +2356,22 @@ async function addPlayerMembership(leagueId, uid, playerId) {
 }
 
 
+
+// ── GLOBAL ERROR HANDLER ──────────────────────────────────
+// Catches any uncaught JS errors and makes them visible as toasts
+// Remove this after debugging is complete
+window.addEventListener('error', function(e) {
+  console.error('Global JS error:', e.message, 'at', e.filename, ':', e.lineno);
+  if (typeof toast === 'function') {
+    toast('JS Error: ' + e.message + ' (line ' + e.lineno + ')');
+  }
+});
+window.addEventListener('unhandledrejection', function(e) {
+  console.error('Unhandled promise rejection:', e.reason);
+  if (typeof toast === 'function') {
+    toast('Async error: ' + (e.reason?.message || e.reason));
+  }
+});
 
 // ── FIREBASE ───────────────────────────────────────────────
 function initFirebase() {
@@ -2704,11 +2725,17 @@ function nav(tab) {
 }
 
 function closeModal(){document.getElementById('modal').style.display='none';}
-function openModal(title,body,footer){
-  document.getElementById('modal-title').textContent=title;
-  document.getElementById('modal-body').innerHTML=body;
-  document.getElementById('modal-ft').innerHTML=footer;
-  document.getElementById('modal').style.display='flex';
+function openModal(title, body, footer) {
+  const modal = document.getElementById('modal');
+  if (!modal) {
+    console.error('openModal: #modal element not found in DOM');
+    alert('UI error: modal container missing. Please hard-refresh (Ctrl+Shift+R).');
+    return;
+  }
+  document.getElementById('modal-title').textContent = title;
+  document.getElementById('modal-body').innerHTML   = body;
+  document.getElementById('modal-ft').innerHTML     = footer;
+  modal.style.display = 'flex';
 }
 
 // ── STANDINGS ─────────────────────────────────────────────
@@ -5953,10 +5980,16 @@ async function saveAddBracketPlayer() {
 // LEAGUE CRUD
 
 function openCreateLeague() {
-  if (!isLoggedIn()) { showAuthScreen(); return; }
-  // Any logged-in user can create a competition — they automatically become the owner.
-  // Super admins can promote users to 'competition_owner' for a cleaner role structure,
-  // but it's not required to create competitions.
+  // Diagnostic: surface auth state visibly if something blocks
+  if (!isLoggedIn()) {
+    toast('Please sign in to create a competition');
+    showAuthScreen();
+    return;
+  }
+  if (APP.auth.loading) {
+    toast('Auth still loading — please wait a moment and try again');
+    return;
+  }
   openModal('New competition',
     `<div class="form-row c2">
       <div class="form-field"><label>League name *</label><input id="nl-name" placeholder="e.g. Summer League 2025" autofocus></div>
