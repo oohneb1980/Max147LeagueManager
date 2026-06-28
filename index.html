@@ -5951,6 +5951,57 @@ async function saveBracketScore(matchId) {
   render();
 }
 
+// ── SEED BRACKET ──────────────────────────────────────────
+function openSeedBracket() {
+  if (!canEditCompetition(APP.activeLeagueId)) { toast("You don't have permission"); return; }
+  const players = APP.players;
+  if (players.length < 2) {
+    openModal('No players yet',
+      `<div style="text-align:center;padding:16px 0">
+        <div style="font-size:40px;margin-bottom:12px">👥</div>
+        <div style="font-size:14px;color:var(--ink-2);line-height:1.6;margin-bottom:4px">
+          Add at least 2 players in the <strong>Participants</strong> tab before seeding the bracket.
+        </div>
+      </div>`,
+      `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+       <button class="btn btn-primary" onclick="closeModal();nav('participants')">Go to Participants →</button>`
+    );
+    return;
+  }
+
+  // Bracket sizes: power of 2, at least as large as player count
+  const sizes = [2,4,8,16,32].filter(s => s >= players.length);
+  const sz = sizes[0] || 32;
+  const shuffled = [...players].sort(() => Math.random() - 0.5).slice(0, sz);
+  // Pad with BYEs if needed
+  while (shuffled.length < sz) shuffled.push({id:'BYE', name:'Bye'});
+
+  window._pendingSeeds = shuffled.map(p => p.id);
+
+  const byeCount = shuffled.filter(p => p.id === 'BYE').length;
+  openModal('Seed bracket',
+    `<div class="alert alert-info" style="margin-bottom:14px">
+      <strong>${players.length}</strong> players → <strong>${sz}</strong>-player bracket
+      ${byeCount ? `(${byeCount} bye${byeCount>1?'s':''})` : '(no byes needed)'}.
+      Players are randomly seeded. Reseed as many times as you like before locking.
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+      ${shuffled.map((p,i) => `<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;
+          background:var(--bg-raised);border-radius:var(--r);font-size:13px">
+        <span style="color:var(--ink-3);font-family:monospace;font-size:11px;min-width:20px">${i+1}</span>
+        <span style="font-weight:${p.id==='BYE'?400:500};color:${p.id==='BYE'?'var(--ink-3)':'var(--ink)'}">
+          ${esc(p.name)}
+        </span>
+      </div>`).join('')}
+    </div>`,
+    `<button class="btn btn-ghost" onclick="openSeedBracket()">🎲 Reseed</button>
+     <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="commitSeedBracket(window._pendingSeeds)">
+       Lock &amp; generate matches
+     </button>`
+  );
+}
+
 async function commitSeedBracket(playerIds) {
   const ct = APP.config.competitionType;
   const isDouble = ct === 'double_elim';
