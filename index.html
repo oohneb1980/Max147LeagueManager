@@ -6032,19 +6032,27 @@ async function commitSeedBracket(playerIds) {
   }
 
   if (isDouble) {
-    // ── LOSERS BRACKET ──────────────────────────────────────
-    // LB has 2*(wbRounds-1) rounds.
-    // Odd  LB rounds: WB losers injected (one odd round per WB round)
-    // Even LB rounds: LB survivors play each other (halving)
-    // Match count in LB round r = n / 2^(ceil(r/2)+1)
-    //   LB R1: n/4   (e.g. 8p → 2 matches: 4 WB-R1 losers)
-    //   LB R2: n/8   (e.g. 8p → 1 match:   2 LB-R1 survivors + 2 WB-R2 losers)
-    //   LB R3: n/8   (same: injected WB-R2 losers play LB-R1 winners)
-    //   LB R4: n/16  (LB-R3 survivors)
-    //   Grand Final: 1 match
+    // ── LOSERS BRACKET (Wikipedia-correct structure) ────────
+    // For n players, LB has 2*(wbRounds-1) rounds:
+    //
+    //   LB R1 (minor): WB-R1 losers fill both slots — n/4 matches
+    //   LB R2 (major): LB-R1 winners vs WB-R2 losers — n/4 matches
+    //   LB R3 (minor): LB-R2 winners play each other — n/8 matches
+    //   LB R4 (major): LB-R3 winner vs WB-Final loser — n/8 matches
+    //   ...
+    //
+    // Match count formula:
+    //   Even and odd rounds in the same "tier" share the same count.
+    //   refOdd = r if r is odd, else r-1
+    //   matchCount = n / 2^(ceil(refOdd/2) + 1)
+    //
+    // WB loser feeding:
+    //   WB R1 losers → LB R1  (both slots are WB losers)
+    //   WB Rr losers (r>1) → LB R(2r-2)  (entityB slot, entityA = LB survivor)
     const lbTotalRounds = 2 * (wbRounds - 1);
     for (let r = 1; r <= lbTotalRounds; r++) {
-      const matchCount = Math.max(1, n / Math.pow(2, Math.ceil(r/2) + 1));
+      const refOdd    = r % 2 === 1 ? r : r - 1;
+      const matchCount = Math.max(1, n / Math.pow(2, Math.ceil(refOdd / 2) + 1));
       for (let i = 0; i < matchCount; i++) {
         newMatches.push({ id:genId(), round:r, matchIndex:i, slot:'L', entityA:'TBD', entityB:'TBD', scoreA:0, scoreB:0, status:'scheduled', winnerId:null, loserId:null, date:'', venue:'' });
       }
@@ -6100,50 +6108,58 @@ function advanceBracket(completedMatch) {
       }
     }
 
-    // ── Loser routing → correct LB round ──
+    // ── Loser routing → correct LB round (Wikipedia) ──────
+    // WB R1 losers → LB R1  (both slots filled with WB losers)
+    // WB Rr (r>1)  → LB R(2*(r-1))  (entityB; entityA = LB survivor)
     if (isDouble && loserId) {
-      const targetLBRound = 2 * round - 1; // WB Rr → LB odd round (2r-1)
-      const lbRound = APP.bracketMatches.filter(m => m.slot==='L' && m.round===targetLBRound)
-                        .sort((a,b) => a.matchIndex - b.matchIndex);
+      const targetLBRound = round === 1 ? 1 : 2 * (round - 1);
+      const lbRound = APP.bracketMatches
+        .filter(m => m.slot === 'L' && m.round === targetLBRound)
+        .sort((a, b) => a.matchIndex - b.matchIndex);
 
       if (round === 1) {
-        // WB R1: 4 losers fill LB R1 in pairs (matchIndex 0,1 → LB match 0; 2,3 → LB match 1)
+        // matchIndex 0,1 → LB[0] ; matchIndex 2,3 → LB[1]
         const lbIdx = Math.floor(matchIndex / 2);
         const lbM   = lbRound.find(m => m.matchIndex === lbIdx);
         if (lbM) {
-          if (lbM.entityA==='TBD')      lbM.entityA = loserId;
-          else if (lbM.entityB==='TBD') lbM.entityB = loserId;
-          if (lbM.entityA!=='TBD' && lbM.entityB!=='TBD') lbM.status='scheduled';
+          if (lbM.entityA === 'TBD')      lbM.entityA = loserId;
+          else if (lbM.entityB === 'TBD') lbM.entityB = loserId;
+          if (lbM.entityA !== 'TBD' && lbM.entityB !== 'TBD') lbM.status = 'scheduled';
         }
       } else {
-        // WB R2+: loser fills entityB slot of the corresponding LB odd round match
-        const lbM = lbRound.find(m => m.matchIndex===matchIndex) || lbRound.find(m => m.entityB==='TBD');
+        // WB R2+: one loser feeds entityB of the corresponding LB major round match.
+        // Use matchIndex to pair correctly when multiple LB matches exist in this round.
+        const lbM = lbRound.find(m => m.matchIndex === matchIndex && m.entityB === 'TBD')
+                 || lbRound.find(m => m.entityB === 'TBD')
+                 || lbRound[0];
         if (lbM) {
-          if (lbM.entityB==='TBD')      lbM.entityB = loserId;
-          else if (lbM.entityA==='TBD') lbM.entityA = loserId;
-          if (lbM.entityA!=='TBD' && lbM.entityB!=='TBD') lbM.status='scheduled';
+          if (lbM.entityB === 'TBD')      lbM.entityB = loserId;
+          else if (lbM.entityA === 'TBD') lbM.entityA = loserId;
+          if (lbM.entityA !== 'TBD' && lbM.entityB !== 'TBD') lbM.status = 'scheduled';
         }
       }
     }
   }
 
+
   // ── Losers bracket progression ──
   if (slot === 'L') {
     const nextRound    = round + 1;
     const nextMatchIdx = Math.floor(matchIndex / 2);
-    const isTop        = matchIndex % 2 === 0;
-    const nextLB = APP.bracketMatches.find(m => m.slot==='L' && m.round===nextRound && m.matchIndex===nextMatchIdx);
+    const nextLB = APP.bracketMatches.find(m =>
+      m.slot === 'L' && m.round === nextRound && m.matchIndex === nextMatchIdx
+    );
     if (nextLB) {
-      // LB survivor fills entityA of next round (WB loser fills entityB)
-      if (isTop) { if (nextLB.entityA==='TBD') nextLB.entityA = winnerId; }
-      else       { if (nextLB.entityB==='TBD') nextLB.entityB = winnerId; }
-      if (nextLB.entityA!=='TBD' && nextLB.entityB!=='TBD') nextLB.status='scheduled';
+      // LB survivor always fills entityA (entityB reserved for incoming WB loser)
+      if (nextLB.entityA === 'TBD') nextLB.entityA = winnerId;
+      else if (nextLB.entityB === 'TBD') nextLB.entityB = winnerId;
+      if (nextLB.entityA !== 'TBD' && nextLB.entityB !== 'TBD') nextLB.status = 'scheduled';
     } else {
-      // LB final winner → GF entityB
-      const gf = APP.bracketMatches.find(m => m.slot==='GF');
-      if (gf && gf.entityB==='TBD') {
+      // No next LB round → this is the LB Final winner → GF entityB
+      const gf = APP.bracketMatches.find(m => m.slot === 'GF' && m.round === 1);
+      if (gf && gf.entityB === 'TBD') {
         gf.entityB = winnerId;
-        if (gf.entityA!=='TBD' && gf.entityB!=='TBD') gf.status='scheduled';
+        if (gf.entityA !== 'TBD' && gf.entityB !== 'TBD') gf.status = 'scheduled';
       }
     }
   }
