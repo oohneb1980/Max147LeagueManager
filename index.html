@@ -3591,33 +3591,27 @@ function toggleHubFilter(key) {
 function renderHub() {
   const f = APP.hubFilter;
 
-  // ── Determine which leagues this user can see ──────────
-  // Super admin: all leagues
-  // Owner / player: only leagues they are enrolled in (have a membership)
-  // Guest: only public (show all — they can view dashboards)
+  // ── All leagues are visible to everyone ───────────────
+  // Access control is on the ACTION BUTTONS, not on visibility.
+  // Any user (guest, player, owner, admin) can see all competitions
+  // and open them to view the public dashboard/leaderboard.
+  // Edit/duplicate/delete buttons are shown only to owners/admins.
   const userLeagues = APP.leagues.filter(lg => {
     if (lg.status === 'archived') lg.status = 'closed'; // normalise
-    if (isSuperAdmin()) return true;
-    if (!isLoggedIn()) return true; // guests see all (read-only dashboards)
-    // Logged-in non-admin: only show competitions they're connected to
-    // canEditCompetition and isLeagueMember check memberships (may be empty if
-    // collectionGroup index not deployed — createdBy is the reliable fallback)
-    return canEditCompetition(lg.id)    // owner membership
-        || isLeagueMember(lg.id)        // player membership
-        || lg.createdBy === APP.auth.uid;  // created by this user
+    return true; // all competitions are visible
   });
 
-  // ── Apply status + ownership filter ───────────────────
+  // ── Apply status + mine-only filter ───────────────────
   const visible = userLeagues.filter(lg => {
     const s = lg.status || 'active';
     if (s==='active' && !f.active) return false;
     if (s==='draft'  && !f.draft)  return false;
     if (s==='closed' && !f.closed) return false;
-    // "Mine only" — competitions I own, created, or am enrolled in as a player
-    if (f.mineOnly) {
-      const isMine = canEditCompetition(lg.id)   // owner via memberships
-                  || lg.createdBy === APP.auth.uid // creator (fallback if memberships not loaded)
-                  || isLeagueMember(lg.id);        // enrolled as player
+    // "Mine only" — competitions I own, created, or am enrolled in
+    if (f.mineOnly && isLoggedIn()) {
+      const isMine = canEditCompetition(lg.id)
+                  || lg.createdBy === APP.auth.uid
+                  || isLeagueMember(lg.id);
       if (!isMine) return false;
     }
     return true;
