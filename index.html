@@ -4368,9 +4368,11 @@ function parseCSVImport(text) {
   const lines = text.split(/\r?\n/).filter(l => l.trim());
   if (!lines.length) { toast('Empty file'); return; }
 
-  // Detect header row (first row — skip it)
+  // Detect header row (first row — skip it if it contains column labels)
   const header = lines[0].toLowerCase();
-  const hasHeader = header.includes('name') || header.includes('player') || header.includes('contact');
+  const hasHeader = header.includes('name') || header.includes('player') || 
+                    header.includes('contact') || header.includes('handicap') ||
+                    header.startsWith('#');
   const dataLines = hasHeader ? lines.slice(1) : lines;
 
   const rows = dataLines.map(line => parseCSVLine(line));
@@ -4426,10 +4428,19 @@ function processImportRows(rows, headerLine) {
   const processed = [];
 
   rows.forEach((cols, i) => {
-    if (!cols.length || !cols[0]) return;
-    const name    = String(cols[0]).trim();
-    const contact = String(cols[1] || '').trim();
-    const handicap= parseInt(cols[2]) || 0;
+    if (!cols.length) return;
+
+    // Auto-detect if first column is a row number (#)
+    // If cols[0] is purely numeric and cols[1] looks like a name, skip cols[0]
+    let offset = 0;
+    const first = String(cols[0] || '').trim();
+    if (first && !isNaN(first) && cols.length > 1 && String(cols[1]||'').trim()) {
+      offset = 1; // first column is a row number — skip it
+    }
+
+    const name    = String(cols[offset]     || '').trim();
+    const contact = String(cols[offset + 1] || '').trim();
+    const handicap= parseInt(cols[offset + 2]) || 0;
 
     if (!name) return;
 
@@ -4543,8 +4554,8 @@ function exportParticipants() {
     ws['!cols'] = [{wch:24},{wch:16},{wch:48}];
     XLSX.utils.book_append_sheet(wb, ws, 'Teams');
   } else {
-    const header = ['#','Name','Contact','Handicap'];
-    const rows = APP.players.map((p,i) => [i+1, p.name, p.contact||'', p.handicap||0]);
+    const header = ['Name','Contact','Handicap'];
+    const rows = APP.players.map(p => [p.name, p.contact||'', p.handicap||0]);
     const ws = XLSX.utils.aoa_to_sheet([header,...rows]);
     ws['!cols'] = [{wch:5},{wch:26},{wch:28},{wch:10}];
     XLSX.utils.book_append_sheet(wb, ws, 'Players');
