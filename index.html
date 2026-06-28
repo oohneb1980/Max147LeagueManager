@@ -5828,6 +5828,7 @@ function renderBracket(isGroupKO=false) {
     ${canEditCompetition(APP.activeLeagueId)?`
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn btn-ghost btn-sm" onclick="nav('participants')" title="Add players in the Participants tab first">👥 Manage players</button>
+      <button class="btn btn-ghost btn-sm" onclick="repairBracket()" title="Re-calculate routing for all completed matches">🔧 Repair routing</button>
       <button class="btn btn-primary btn-sm" onclick="openSeedBracket()">🎲 ${APP.bracketMatches.length?'Reseed bracket':'Seed bracket'}</button>
     </div>`:''}
   </div>
@@ -6000,6 +6001,50 @@ function openSeedBracket() {
        Lock &amp; generate matches
      </button>`
   );
+}
+
+// ── REPAIR BRACKET ─────────────────────────────────────────
+// Re-runs advanceBracket on all completed matches in chronological order.
+// Use this to fix brackets that were seeded with old routing logic,
+// or to recover from a desync between Firestore and in-memory state.
+async function repairBracket() {
+  if (!canEditCompetition(APP.activeLeagueId)) { toast("You don't have permission"); return; }
+  if (!confirm('This will re-calculate all bracket routing from completed match results. Continue?')) return;
+
+  // Reset all TBD slots in non-R1 matches — keep R1 seeds and completed results
+  APP.bracketMatches.forEach(m => {
+    if (m.status === 'completed') return; // keep completed matches intact
+    if (m.slot === 'GF' && m.round === 2) { m.status = 'if_needed'; m.entityA='TBD'; m.entityB='TBD'; return; }
+    if (m.slot === 'GF') { m.entityA='TBD'; m.entityB='TBD'; m.status='scheduled'; return; }
+    // For WB: keep R1 seeds, reset later rounds
+    if (m.slot === 'W' && m.round > 1) { m.entityA='TBD'; m.entityB='TBD'; }
+    // For LB: reset all (they're all filled by advanceBracket)
+    if (m.slot === 'L') { m.entityA='TBD'; m.entityB='TBD'; }
+    m.winnerId = null; m.loserId = null;
+    if (m.entityA !== 'TBD' && m.entityB !== 'TBD') m.status = 'scheduled';
+    else m.status = 'scheduled';
+  });
+
+  // Re-run advanceBracket on all completed matches in round order
+  const completed = APP.bracketMatches
+    .filter(m => m.status === 'completed' && m.winnerId)
+    .sort((a, b) => {
+      // Process WB before LB, earlier rounds first
+      const slotOrder = {W:0, L:1, GF:2};
+      if (a.slot !== b.slot) return (slotOrder[a.slot]||0) - (slotOrder[b.slot]||0);
+      return a.round - b.round || a.matchIndex - b.matchIndex;
+    });
+
+  for (const m of completed) {
+    advanceBracket(m);
+  }
+
+  // Persist all repaired bracket matches
+  await Promise.all(APP.bracketMatches.map(m => persistInLeague('bracketMatches', m.id, m)));
+  saveActiveToLocal();
+  toast(`Bracket repaired — ${completed.length} matches reprocessed ✓`);
+  render();
+  requestAnimationFrame(()=>{ try { drawBracketLines(); } catch(e){} });
 }
 
 async function commitSeedBracket(playerIds) {
