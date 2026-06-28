@@ -3061,25 +3061,45 @@ function renderAccessDenied(message) {
 // HUB
 // ══════════════════════════════════════════════════════════
 function leagueStats(lg) {
-  const ct = lg.competitionType||'league';
+  const ct = lg.competitionType || 'league';
+
+  // Read persisted data from localStorage for this competition.
+  // This is the source of truth on the hub — APP.players only contains
+  // data for the currently open competition.
+  let cached = {};
+  try {
+    const raw = localStorage.getItem(lsLeague(lg.id));
+    if (raw) cached = JSON.parse(raw);
+  } catch(e) {}
+
+  const players  = cached.players  || [];
+  const teams    = cached.teams    || [];
+  const matches  = cached.matches  || [];
+  const bMatches = cached.bracketMatches || [];
+  const gMatches = cached.groupMatches   || [];
+
   if (ct === 'group_stage') {
-    const gseed = (typeof GROUP_SEED!=='undefined'&&GROUP_SEED[lg.id]) ? GROUP_SEED[lg.id] : {players:[],groupMatches:[]}; const _gseed=gseed; const gseed2 = _gseed||{players:[],groupMatches:[]};
-    const gms = gseed.groupMatches||[];
-    const completed = gms.filter(m=>m.status==='completed').length;
-    const remaining = gms.filter(m=>m.status!=='completed').length;
-    return {participants: gseed.players.length, matches: gms.length, completed, remaining};
+    const completed = gMatches.filter(m => m.status === 'completed').length;
+    const remaining = gMatches.filter(m => m.status !== 'completed').length;
+    return { participants: players.length, matches: gMatches.length, completed, remaining };
   }
-  if (ct !== 'league') {
-    const bseed = BRACKET_SEED[lg.id]||{players:[],bracketMatches:[]};
-    const bms = bseed.bracketMatches||[];
-    const completed = bms.filter(m=>m.status==='completed').length;
-    const remaining = bms.filter(m=>m.status!=='completed'&&m.entityA!=='TBD'&&m.entityB!=='TBD').length;
-    return {participants: bseed.players.length, matches: bms.length, completed, remaining};
+
+  if (ct === 'single_elim' || ct === 'double_elim') {
+    const playable = bMatches.filter(m => m.entityA !== 'TBD' && m.entityB !== 'TBD');
+    const completed = bMatches.filter(m => m.status === 'completed').length;
+    const remaining = playable.filter(m => m.status !== 'completed').length;
+    return { participants: players.length, matches: bMatches.length, completed, remaining };
   }
-  const seed=SEED[lg.id]||{players:[],teams:[],matches:[]};
-  const ents=lg.format==='individual'?seed.players:seed.teams;
-  const completed=seed.matches.filter(m=>m.status==='completed').length;
-  return {participants:ents.length, matches:seed.matches.length, completed, remaining: seed.matches.length-completed};
+
+  // League format
+  const ents      = lg.format === 'team' ? teams : players;
+  const completed = matches.filter(m => m.status === 'completed').length;
+  return {
+    participants: ents.length,
+    matches:      matches.length,
+    completed,
+    remaining:    matches.length - completed,
+  };
 }
 
 
@@ -6548,8 +6568,7 @@ async function saveEditPlayer(pid) {
   p.handicap = hc;
 
   await persistInLeague('players', pid, p);
-
-  // If linked to a user account, update their member display name too
+  saveActiveToLocal();  // update localStorage so hub stats reflect changes
   if (p.uid && db && APP.activeLeagueId) {
     try {
       await db.collection('leagues').doc(APP.activeLeagueId)
@@ -6593,8 +6612,7 @@ async function savePlayer(teamId=null) {
   }
 
   await persistInLeague('players', pid, p);
-
-  // If linked to a real user, create/update their member record
+  saveActiveToLocal();  // update localStorage so hub card stats reflect new player count
   if (p.uid && db && APP.activeLeagueId) {
     try {
       const memData = {
@@ -7002,8 +7020,8 @@ async function delBreak(id) {
 // ── ACTIONS ───────────────────────────────────────────────
 async function setStatus(id,status){if(!canEditCompetition(APP.activeLeagueId)){toast("No permission");return;}const m=APP.matches.find(m=>m.id===id);m.status=status;await persistInLeague('matches',id,m);toast(`Marked as ${status}`);render();}
 async function delMatch(id){if(!canEditCompetition(APP.activeLeagueId)){toast("No permission");return;}if(!confirm('Remove this match?'))return;APP.matches=APP.matches.filter(m=>m.id!==id);await deleteInLeague('matches',id);toast('Match removed');render();}
-async function delPlayer(id){if(!canEditCompetition(APP.activeLeagueId)){toast("No permission");return;}if(!confirm('Remove player?'))return;APP.players=APP.players.filter(p=>p.id!==id);APP.teams.forEach(t=>{t.players=(t.players||[]).filter(x=>x!==id);});await deleteInLeague('players',id);toast('Player removed');render();}
-async function delTeam(id){if(!confirm('Remove team?'))return;APP.teams=APP.teams.filter(t=>t.id!==id);await deleteInLeague('teams',id);toast('Team removed');render();}
+async function delPlayer(id){if(!canEditCompetition(APP.activeLeagueId)){toast("No permission");return;}if(!confirm('Remove player?'))return;APP.players=APP.players.filter(p=>p.id!==id);APP.teams.forEach(t=>{t.players=(t.players||[]).filter(x=>x!==id);});await deleteInLeague('players',id);saveActiveToLocal();toast('Player removed');render();}
+async function delTeam(id){if(!canEditCompetition(APP.activeLeagueId)){toast("No permission");return;}if(!confirm('Remove team?'))return;APP.teams=APP.teams.filter(t=>t.id!==id);await deleteInLeague('teams',id);saveActiveToLocal();toast('Team removed');render();}
 async function removeFromTeam(teamId,pid){const t=APP.teams.find(t=>t.id===teamId);t.players=(t.players||[]).filter(p=>p!==pid);await persistInLeague('teams',teamId,t);APP.openTeams[teamId]=true;toast('Player removed');render();}
 function testFb(){if(!db){toast('Firebase not initialised');return;}db.collection(LEAGUES_COL).limit(1).get().then(()=>toast('Firebase OK ✓')).catch(e=>toast('Failed: '+e.message));}
 
