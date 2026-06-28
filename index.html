@@ -4224,16 +4224,21 @@ function renderParticipants() {
       </div></div>`;
 
     const count = APP.players.length;
-    html += `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+    html += `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
       <span style="font-size:12px;color:var(--ink-3)">${count} player${count!==1?'s':''} registered</span>
+      ${canManage?`<div style="display:flex;gap:6px;align-items:center">
+        <button class="btn btn-ghost btn-xs" onclick="toggleSelectAllPlayers()" id="sel-all-btn">☐ Select all</button>
+        <button class="btn btn-danger btn-xs" id="del-selected-btn" style="display:none" onclick="delSelectedPlayers()">🗑 Delete selected</button>
+      </div>`:''}
     </div>`;
 
     html += `<div class="panel" style="padding:0;overflow:hidden"><div class="tbl-wrap"><table>
-      <thead><tr><th>#</th><th>Name</th><th>Contact</th><th>Handicap</th>${canManage?'<th></th>':''}</tr></thead><tbody>`;
+      <thead><tr>${canManage?'<th style="width:32px"></th>':''}<th>#</th><th>Name</th><th>Contact</th><th>Handicap</th>${canManage?'<th></th>':''}</tr></thead><tbody>`;
 
     APP.players.forEach((p,i) => {
       const linkedUser = p.uid ? `<span style="font-size:10px;color:var(--green);margin-left:4px" title="Linked to user account">●</span>` : '';
       html += `<tr>
+        ${canManage?`<td><input type="checkbox" class="player-cb" data-pid="${p.id}" onchange="onPlayerCbChange()"></td>`:''}
         <td style="color:var(--ink-3)">${i+1}</td>
         <td class="name-cell">${esc(p.name)}${linkedUser}</td>
         <td style="color:var(--ink-2)">${esc(p.contact)||'—'}</td>
@@ -4453,15 +4458,15 @@ function processImportRows(rows, headerLine) {
   const existingNames = new Set(APP.players.map(p => p.name.toLowerCase().trim()));
   const processed = [];
 
+  const isTeamImport = APP.config.format === 'team';
   rows.forEach((cols, i) => {
     if (!cols.length) return;
 
     // Auto-detect if first column is a row number (#)
-    // If cols[0] is purely numeric and cols[1] looks like a name, skip cols[0]
     let offset = 0;
     const first = String(cols[0] || '').trim();
     if (first && !isNaN(first) && cols.length > 1 && String(cols[1]||'').trim()) {
-      offset = 1; // first column is a row number — skip it
+      offset = 1;
     }
 
     const name    = String(cols[offset]     || '').trim();
@@ -4632,6 +4637,10 @@ function renderConfig() {
           <option value="closed" ${APP.config.status==='closed'?'selected':''}>Closed</option>
         </select>
       </div>
+    </div>
+    <div class="form-row c2">
+      <div class="form-field"><label>Start date</label><input id="cfg-start" type="date" value="${APP.config.startDate||''}" oninput="APP.config.startDate=this.value"></div>
+      <div class="form-field"><label>End date</label><input id="cfg-end" type="date" value="${APP.config.endDate||''}" oninput="APP.config.endDate=this.value"></div>
     </div>
     <div class="form-field" style="margin-bottom:12px"><label>Competition type</label>
       <div class="toggle-group" style="margin-top:5px">
@@ -6047,6 +6056,81 @@ async function repairBracket() {
   requestAnimationFrame(()=>{ try { drawBracketLines(); } catch(e){} });
 }
 
+// ── AUTO-ASSIGN BRACKET DATES ─────────────────────────────
+// Rules:
+//   - Competition must have startDate and endDate set
+//   - Minimum 2 matches per day
+//   - Each player plays at most 1 match per day
+//   - All matches must fall within startDate..endDate
+//   - Rounds progress in order: WB R1 → WB R2 → ... → LB R1 → ... → GF
+function autoAssignBracketDates(matches) {
+  const start = APP.config.startDate;
+  const end   = APP.config.endDate;
+  if (!start || !end) return; // no period set — skip
+
+  const startD = new Date(start);
+  const endD   = new Date(end);
+  const totalDays = Math.round((endD - startD) / 86400000) + 1;
+  if (totalDays < 1) return;
+
+  // Group matches by slot+round order
+  const slotOrder = {W:0, L:1, GF:2};
+  const rounds = [...matches]
+    .filter(m => m.status !== 'if_needed')
+    .sort((a,b) => {
+      const so = (slotOrder[a.slot]||0) - (slotOrder[b.slot]||0);
+      if (so) return so;
+      return a.round - b.round || a.matchIndex - b.matchIndex;
+    });
+
+  // Distribute rounds across the date range
+  // Group matches by round tier
+  const tiers = [];
+  let lastKey = null;
+  for (const m of rounds) {
+    const key = m.slot + '-' + m.round;
+    if (key !== lastKey) { tiers.push([]); lastKey = key; }
+    tiers[tiers.length-1].push(m);
+  }
+
+  const daysPerTier = Math.max(1, Math.floor(totalDays / tiers.length));
+  let dayOffset = 0;
+
+  tiers.forEach((tier, ti) => {
+    // Assign 2+ matches per day, respecting 1-match-per-player-per-day
+    const assignedDate = new Date(startD);
+    assignedDate.setDate(startD.getDate() + Math.min(dayOffset, totalDays - 1));
+    const dateStr = assignedDate.toISOString().slice(0, 10);
+
+    const usedToday = new Set();
+    const overflow  = [];
+    let extraDay = 0;
+
+    tier.forEach(m => {
+      // Check if either player already has a match today
+      const conflict = usedToday.has(m.entityA) || usedToday.has(m.entityB);
+      if (conflict) {
+        overflow.push(m);
+      } else {
+        m.date = dateStr;
+        if (m.entityA !== 'TBD') usedToday.add(m.entityA);
+        if (m.entityB !== 'TBD') usedToday.add(m.entityB);
+      }
+    });
+
+    // Assign overflow to next day
+    overflow.forEach(m => {
+      extraDay++;
+      const od = new Date(startD);
+      od.setDate(startD.getDate() + Math.min(dayOffset + extraDay, totalDays - 1));
+      m.date = od.toISOString().slice(0, 10);
+    });
+
+    dayOffset += daysPerTier;
+  });
+}
+
+
 async function commitSeedBracket(playerIds) {
   const ct = APP.config.competitionType;
   const isDouble = ct === 'double_elim';
@@ -6112,6 +6196,7 @@ async function commitSeedBracket(playerIds) {
 
   APP.bracketMatches = newMatches;
   newMatches.filter(m => m.status==='completed').forEach(m => advanceBracket(m));
+  autoAssignBracketDates(newMatches);  // Item 9: auto-fill dates from competition period
   await Promise.all(newMatches.map(m => persistInLeague('bracketMatches', m.id, m)));
   saveActiveToLocal();
   closeModal();
@@ -6276,6 +6361,10 @@ function openCreateLeague() {
         <select id="nl-status"><option value="draft">Draft</option><option value="active" selected>Active</option></select>
       </div>
     </div>
+    <div class="form-row c2">
+      <div class="form-field"><label>Start date</label><input id="nl-start" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
+      <div class="form-field"><label>End date</label><input id="nl-end" type="date"></div>
+    </div>
     <div class="form-field" style="margin-bottom:12px"><label>Competition type</label>
       <div class="toggle-group" style="margin-top:5px" id="nl-ct-tg">
         <div class="tog on" onclick="setNlCt('league',this)">📋 League</div>
@@ -6357,6 +6446,8 @@ async function createLeague() {
     // Meta
     highBreakThreshold: 50,
     trackHighBreaks:    true,
+    startDate:   document.getElementById('nl-start')?.value || '',
+    endDate:     document.getElementById('nl-end')?.value   || '',
     createdBy:   APP.auth.uid || null,
     createdAt:   new Date().toISOString().slice(0, 10),
   };
@@ -6473,6 +6564,11 @@ async function deleteLeague(id){
 
 async function saveLeagueConfig(){
   if (!canEditCompetition(APP.activeLeagueId)) { toast("You don't have permission to change settings"); return; }
+  // Capture date fields if present
+  const sd = document.getElementById('cfg-start')?.value;
+  const ed = document.getElementById('cfg-end')?.value;
+  if (sd !== undefined) APP.config.startDate = sd;
+  if (ed !== undefined) APP.config.endDate   = ed;
   const lg=APP.leagues.find(l=>l.id===APP.activeLeagueId);
   if(!lg)return;
   Object.assign(lg, APP.config);
@@ -6747,7 +6843,8 @@ function openAddTeam(){
   if(!canEditCompetition(APP.activeLeagueId)){toast("You don't have permission");return;}
   openModal('Add team',
     `<div class="form-row"><div class="form-field"><label>Team name *</label><input id="mt-name" placeholder="Team name" autofocus></div></div>
-    <div class="form-row"><div class="form-field"><label>Home venue</label><input id="mt-venue" placeholder="Home venue"></div></div>`,
+    <div class="form-row"><div class="form-field"><label>Home venue</label><input id="mt-venue" placeholder="Home venue"></div></div>
+    <div style="margin-top:10px;font-size:12px;color:var(--ink-3)">Add players to this team after creating it via the team's player list.</div>`,
     `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
      <button class="btn btn-primary" onclick="saveTeam()">Add team</button>`
   );
@@ -6871,12 +6968,17 @@ function openScoreEntry(matchId){
   openModal(`Score entry — ${aName} vs ${bName}`,
     `<div class="alert alert-info" style="margin-bottom:14px">Scores sync from Max147 when connected. Frame log feeds Player Stats.</div>
     <div class="form-row c2">
-      <div class="form-field"><label>Frames — ${aName}</label><input id="es-sa" type="number" min="0" value="${m.scoreA}"></div>
-      <div class="form-field"><label>Frames — ${bName}</label><input id="es-sb" type="number" min="0" value="${m.scoreB}"></div>
+      <div class="form-field"><label>Frames — ${aName}</label><input id="es-sa" type="number" min="0" value="${m.scoreA}" oninput="checkAutoComplete(${JSON.stringify(APP.config.bestOf||7)})"></div>
+      <div class="form-field"><label>Frames — ${bName}</label><input id="es-sb" type="number" min="0" value="${m.scoreB}" oninput="checkAutoComplete(${JSON.stringify(APP.config.bestOf||7)})"></div>
     </div>
+    <div style="font-size:11px;color:var(--ink-3);margin:-6px 0 10px" id="es-auto-note"></div>
     <div class="form-row c2">
       <div class="form-field"><label>High break A</label><input id="es-hba" type="number" min="0" max="147" value="${m.highBreakA||0}"></div>
       <div class="form-field"><label>High break B</label><input id="es-hbb" type="number" min="0" max="147" value="${m.highBreakB||0}"></div>
+    </div>
+    <div class="form-row c2">
+      <div class="form-field"><label>Date</label><input id="es-date" type="date" value="${m.date||''}"></div>
+      <div class="form-field"><label>Venue</label><input id="es-venue" value="${esc(m.venue||'')}" placeholder="Venue"></div>
     </div>
     <div class="form-row"><div class="form-field"><label>Status</label>
       <select id="es-status"><option value="scheduled" ${m.status==='scheduled'?'selected':''}>Scheduled</option><option value="live" ${m.status==='live'?'selected':''}>Live</option><option value="completed" ${m.status==='completed'?'selected':''}>Completed</option></select>
@@ -6892,25 +6994,57 @@ function openScoreEntry(matchId){
   );
 }
 
+// ── AUTO-COMPLETE HINT ────────────────────────────────────
+function checkAutoComplete(bestOf) {
+  const sa = +document.getElementById('es-sa')?.value||0;
+  const sb = +document.getElementById('es-sb')?.value||0;
+  const needed = Math.ceil(bestOf/2);
+  const note = document.getElementById('es-auto-note');
+  if (!note) return;
+  if (sa >= needed || sb >= needed) {
+    note.innerHTML = '<span style="color:var(--green)">✓ Will auto-complete when saved</span>';
+  } else {
+    note.textContent = `Need ${needed} frames to win (best of ${bestOf})`;
+  }
+}
+
 async function saveScore(matchId){
-  if(!canEnterScore(APP.matches.find(m=>m.id===matchId)?.entityA, APP.matches.find(m=>m.id===matchId)?.entityB)){toast("You don't have permission");return;}
-  const m=APP.matches.find(x=>x.id===matchId);
-  m.scoreA=+document.getElementById('es-sa').value;
-  m.scoreB=+document.getElementById('es-sb').value;
-  m.highBreakA=+document.getElementById('es-hba').value;
-  m.highBreakB=+document.getElementById('es-hbb').value;
-  m.status=document.getElementById('es-status').value;
+  const match0 = APP.matches.find(m=>m.id===matchId);
+  if(!canEnterScore(match0?.entityA, match0?.entityB)){toast("You don't have permission");return;}
+  const m = match0;
+  m.scoreA = +document.getElementById('es-sa').value;
+  m.scoreB = +document.getElementById('es-sb').value;
+  m.highBreakA = +document.getElementById('es-hba').value||0;
+  m.highBreakB = +document.getElementById('es-hbb').value||0;
+  m.date   = document.getElementById('es-date')?.value || m.date || '';
+  m.venue  = document.getElementById('es-venue')?.value.trim() || m.venue || '';
+
+  // ── Item 8: Auto-complete when a winner is clear ──────
+  const bo = APP.config.bestOf || 7;
+  const needed = Math.ceil(bo / 2);
+  if (m.scoreA >= needed || m.scoreB >= needed) {
+    m.status = 'completed';
+  } else {
+    m.status = document.getElementById('es-status')?.value || m.status;
+  }
+
   const frames=[];
-  for(let i=0;i<(APP.config.bestOf||7);i++){
+  for(let i=0;i<bo;i++){
     const w=document.getElementById(`fd-w-${i}`)?.value; if(!w)continue;
     const pa=document.getElementById(`fd-pa-${i}`);
     const pb=document.getElementById(`fd-pb-${i}`);
-    frames.push({frame:i+1,winnerA:w==='A',playerA:pa?pa.value:null,playerB:pb?pb.value:null,breakA:+document.getElementById(`fd-ba-${i}`)?.value||0,breakB:+document.getElementById(`fd-bb-${i}`)?.value||0});
+    frames.push({frame:i+1,winnerA:w==='A',playerA:pa?pa.value:null,playerB:pb?pb.value:null,
+      breakA:+document.getElementById(`fd-ba-${i}`)?.value||0,
+      breakB:+document.getElementById(`fd-bb-${i}`)?.value||0});
   }
-  m.frameDetails=frames;
-  await persistInLeague('matches',matchId,m);
-  if (m.status==='completed') await extractAndSaveBreaks(m);
-  closeModal(); toast('Score saved ✓'); nav('dashboard');
+  m.frameDetails = frames;
+
+  await persistInLeague('matches', matchId, m);
+  if (m.status === 'completed') await extractAndSaveBreaks(m);
+  saveActiveToLocal();  // ── Item 11: ensure leaderboard reflects new score
+  closeModal();
+  toast('Score saved ✓');
+  render();  // re-render current tab so leaderboard updates immediately
 }
 
 function openFrameLog(matchId){
@@ -7129,6 +7263,38 @@ async function delBreak(id) {
 async function setStatus(id,status){if(!canEditCompetition(APP.activeLeagueId)){toast("No permission");return;}const m=APP.matches.find(m=>m.id===id);m.status=status;await persistInLeague('matches',id,m);toast(`Marked as ${status}`);render();}
 async function delMatch(id){if(!canEditCompetition(APP.activeLeagueId)){toast("No permission");return;}if(!confirm('Remove this match?'))return;APP.matches=APP.matches.filter(m=>m.id!==id);await deleteInLeague('matches',id);toast('Match removed');render();}
 async function delPlayer(id){if(!canEditCompetition(APP.activeLeagueId)){toast("No permission");return;}if(!confirm('Remove player?'))return;APP.players=APP.players.filter(p=>p.id!==id);APP.teams.forEach(t=>{t.players=(t.players||[]).filter(x=>x!==id);});await deleteInLeague('players',id);saveActiveToLocal();toast('Player removed');render();}
+
+function onPlayerCbChange() {
+  const cbs = document.querySelectorAll('.player-cb:checked');
+  const btn = document.getElementById('del-selected-btn');
+  const allBtn = document.getElementById('sel-all-btn');
+  const total = document.querySelectorAll('.player-cb').length;
+  if (btn) btn.style.display = cbs.length > 0 ? '' : 'none';
+  if (btn && cbs.length > 0) btn.textContent = `🗑 Delete selected (${cbs.length})`;
+  if (allBtn) allBtn.textContent = cbs.length === total ? '☑ Deselect all' : '☐ Select all';
+}
+
+function toggleSelectAllPlayers() {
+  const cbs = document.querySelectorAll('.player-cb');
+  const anyUnchecked = [...cbs].some(cb => !cb.checked);
+  cbs.forEach(cb => { cb.checked = anyUnchecked; });
+  onPlayerCbChange();
+}
+
+async function delSelectedPlayers() {
+  const cbs = [...document.querySelectorAll('.player-cb:checked')];
+  if (!cbs.length) return;
+  if (!confirm(`Remove ${cbs.length} player${cbs.length>1?'s':''}? This cannot be undone.`)) return;
+  const ids = cbs.map(cb => cb.dataset.pid);
+  for (const id of ids) {
+    APP.players = APP.players.filter(p => p.id !== id);
+    APP.teams.forEach(t => { t.players = (t.players||[]).filter(x => x !== id); });
+    await deleteInLeague('players', id);
+  }
+  saveActiveToLocal();
+  toast(`${ids.length} player${ids.length>1?'s':''} removed`);
+  render();
+}
 async function delTeam(id){if(!canEditCompetition(APP.activeLeagueId)){toast("No permission");return;}if(!confirm('Remove team?'))return;APP.teams=APP.teams.filter(t=>t.id!==id);await deleteInLeague('teams',id);saveActiveToLocal();toast('Team removed');render();}
 async function removeFromTeam(teamId,pid){const t=APP.teams.find(t=>t.id===teamId);t.players=(t.players||[]).filter(p=>p!==pid);await persistInLeague('teams',teamId,t);APP.openTeams[teamId]=true;toast('Player removed');render();}
 function testFb(){if(!db){toast('Firebase not initialised');return;}db.collection(LEAGUES_COL).limit(1).get().then(()=>toast('Firebase OK ✓')).catch(e=>toast('Failed: '+e.message));}
