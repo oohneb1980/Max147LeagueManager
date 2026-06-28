@@ -1499,7 +1499,7 @@ tbody tr:nth-child(n+6){ animation-delay: 100ms;}
       </div>
       <div class="topbar-right">
         <button class="btn btn-ghost btn-sm" id="back-btn" style="display:none" onclick="goHub()">← Back</button>
-        <div class="firebase-dot" id="fb-dot" title="Firebase"></div>
+        <div class="firebase-dot" id="fb-dot" title="Firebase" style="display:none"></div>
         <!-- User chip — populated by auth -->
         <div id="user-chip-area"></div>
       </div>
@@ -2447,8 +2447,11 @@ function initFirebase() {
 
 function setFbDot(s) {
   const d=document.getElementById('fb-dot');
+  if (!d) return;
   d.className='firebase-dot '+(s==='connected'?'connected':s==='error'?'error':'');
   d.title='Firebase: '+s;
+  // Only super admins see the Firebase connection indicator
+  d.style.display = isSuperAdmin() ? '' : 'none';
 }
 
 // ── PERSISTENCE ────────────────────────────────────────────
@@ -4161,12 +4164,16 @@ function renderParticipants() {
       <thead><tr><th>#</th><th>Name</th><th>Contact</th><th>Handicap</th>${canManage?'<th></th>':''}</tr></thead><tbody>`;
 
     APP.players.forEach((p,i) => {
+      const linkedUser = p.uid ? `<span style="font-size:10px;color:var(--green);margin-left:4px" title="Linked to user account">●</span>` : '';
       html += `<tr>
         <td style="color:var(--ink-3)">${i+1}</td>
-        <td class="name-cell">${esc(p.name)}</td>
+        <td class="name-cell">${esc(p.name)}${linkedUser}</td>
         <td style="color:var(--ink-2)">${esc(p.contact)||'—'}</td>
         <td>${p.handicap||0}</td>
-        ${canManage?`<td><button class="btn btn-danger btn-xs" onclick="delPlayer('${p.id}')">Remove</button></td>`:''}
+        ${canManage?`<td style="display:flex;gap:4px">
+          <button class="btn btn-ghost btn-xs" onclick="openEditPlayer('${p.id}')">✏️</button>
+          <button class="btn btn-danger btn-xs" onclick="delPlayer('${p.id}')">✕</button>
+        </td>`:''}
       </tr>`;
     });
     html += `</tbody></table></div></div>`;
@@ -4613,18 +4620,18 @@ function renderConfig() {
       <button class="btn btn-ghost btn-sm" onclick="exportLeague()">⬇ Export JSON</button>
       <button class="btn btn-ghost btn-sm" onclick="document.getElementById('imp').click()">⬆ Import JSON</button>
       <input type="file" id="imp" accept=".json" style="display:none" onchange="importLeague(event)">
-      <button class="btn btn-danger btn-sm" onclick="resetLeague()">🗑 Reset league data</button>
+      ${isSuperAdmin()?`<button class="btn btn-danger btn-sm" onclick="resetLeague()">🗑 Reset data</button>`:''}
     </div>
   </div>
 
-  <div class="panel">
+  ${isSuperAdmin()?`<div class="panel">
     <div class="panel-hd">
       <div class="panel-title">Firebase</div>
       <span style="color:${fbConnected?'var(--green)':'var(--red)'};font-size:12px">${fbConnected?'● Connected':'● Not connected'}</span>
     </div>
     <div class="alert alert-info">Firestore path: <code>leagues/${APP.activeLeagueId}/{players|teams|matches}</code></div>
     <button class="btn btn-ghost btn-sm" onclick="testFb()">Test connection</button>
-  </div>`;
+  </div>`:''}`;
 }
 
 
@@ -6416,6 +6423,68 @@ function pickUser(uid) {
   const q = document.getElementById('upick-search')?.value || '';
   _renderUserPickerList(window._upickUsers || [], q);
 }
+
+// ── EDIT PLAYER ───────────────────────────────────────────
+function openEditPlayer(pid) {
+  if (!canEditCompetition(APP.activeLeagueId)) { toast("You don't have permission"); return; }
+  const p = APP.players.find(x=>x.id===pid);
+  if (!p) { toast('Player not found'); return; }
+  openModal(`Edit player — ${esc(p.name)}`,
+    `<div class="form-row">
+      <div class="form-field">
+        <label>Name *</label>
+        <input id="ep-name" value="${esc(p.name)}" placeholder="Player name" autofocus>
+      </div>
+    </div>
+    <div class="form-row c2">
+      <div class="form-field">
+        <label>Email / contact</label>
+        <input id="ep-contact" value="${esc(p.contact||'')}" placeholder="email or phone">
+      </div>
+      <div class="form-field">
+        <label>Handicap</label>
+        <input id="ep-hc" type="number" value="${p.handicap||0}" min="0" max="147">
+      </div>
+    </div>
+    ${p.uid?`<div style="margin-top:8px;padding:8px 12px;background:var(--bg-raised);border-radius:var(--r);font-size:12px;color:var(--ink-2)">
+      🔗 Linked to user account <span style="color:var(--green)">●</span>
+      <span style="color:var(--ink-3);margin-left:4px">${p.uid}</span>
+    </div>`:''}`,
+    `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="saveEditPlayer('${pid}')">Save changes</button>`
+  );
+}
+
+async function saveEditPlayer(pid) {
+  const name    = document.getElementById('ep-name')?.value.trim();
+  const contact = document.getElementById('ep-contact')?.value.trim() || '';
+  const hc      = Math.round(+(document.getElementById('ep-hc')?.value) || 0);
+
+  if (!name) { toast('Name is required'); return; }
+
+  const p = APP.players.find(x=>x.id===pid);
+  if (!p) return;
+
+  p.name     = name;
+  p.contact  = contact;
+  p.handicap = hc;
+
+  await persistInLeague('players', pid, p);
+
+  // If linked to a user account, update their member display name too
+  if (p.uid && db && APP.activeLeagueId) {
+    try {
+      await db.collection('leagues').doc(APP.activeLeagueId)
+        .collection('members').doc(p.uid)
+        .update({ displayName: name, email: contact });
+    } catch(e) { /* member doc may not exist — ignore */ }
+  }
+
+  closeModal();
+  toast('Player updated ✓');
+  render();
+}
+
 
 async function savePlayer(teamId=null) {
   const resolvedTeamId = teamId || window._addPlayerTeamId;
