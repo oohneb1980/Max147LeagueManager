@@ -5663,8 +5663,12 @@ function getBracketChampion() {
   // In double elim: winner of GF slot
   const ct = APP.config.competitionType;
   if (ct==='double_elim') {
-    const gf = APP.bracketMatches.find(m=>m.slot==='GF'&&m.status==='completed');
-    if (gf&&gf.winnerId) return getBracketFullName(gf.winnerId);
+    // Check GF2 first (bracket reset — highest priority if played)
+    const gf2 = APP.bracketMatches.find(m=>m.slot==='GF'&&m.round===2&&m.status==='completed');
+    if (gf2?.winnerId) return getBracketFullName(gf2.winnerId);
+    // Check GF1: only a champion if WB finalist won (entityA)
+    const gf1 = APP.bracketMatches.find(m=>m.slot==='GF'&&m.round===1&&m.status==='completed');
+    if (gf1?.winnerId && gf1.winnerId===gf1.entityA) return getBracketFullName(gf1.winnerId);
     return null;
   }
   // Single elim: winner of highest round
@@ -5747,12 +5751,38 @@ function renderBracket(isGroupKO=false) {
     });
     lBracketHTML += `</div>`;
 
-    // Grand final
+    // Grand Final + bracket reset
     if (gfMatch) {
-      lBracketHTML += `<div style="margin-top:20px;display:flex;align-items:center;gap:16px">
-        <div class="bracket-section-title" style="margin:0">⚔️ Grand Final</div>
-        ${renderBracketMatch(gfMatch, {grandFinal:true})}
-        ${champion?`<div class="bracket-champion" style="width:160px"><div class="bc-label">🏆 Champion</div><div class="bc-name">${champion}</div></div>`:''}
+      const gf2Match = APP.bracketMatches.find(m=>m.slot==='GF'&&m.round===2);
+      const gf1Done  = gfMatch.status === 'completed';
+      const needsReset = gf1Done && gfMatch.winnerId === gfMatch.entityB; // LB winner won GF1
+      lBracketHTML += `<div style="margin-top:20px">
+        <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+          <div>
+            <div style="font-size:11px;font-weight:700;color:var(--gold);margin-bottom:6px">⚔️ Grand Final</div>
+            <div style="font-size:11px;color:var(--ink-3);margin-bottom:8px">
+              ${gf1Done?'':'WB finalist (undefeated) vs LB finalist (1 loss)'}
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+          ${renderBracketMatch(gfMatch, {grandFinal:true})}
+          ${!gf1Done?`<div style="font-size:12px;color:var(--ink-3);max-width:180px;line-height:1.5">
+            If <strong style="color:var(--ink)">WB winner</strong> wins → 🏆 Champion<br>
+            If <strong style="color:var(--ink)">LB winner</strong> wins → bracket reset played
+          </div>`:''}
+        </div>
+        ${needsReset && gf2Match ? `
+        <div style="margin-top:16px">
+          <div style="font-size:11px;font-weight:700;color:var(--amber);margin-bottom:6px">🔄 Bracket Reset</div>
+          <div style="font-size:11px;color:var(--ink-3);margin-bottom:8px">Both players have 1 loss — winner takes all</div>
+          ${renderBracketMatch(gf2Match, {grandFinal:true})}
+        </div>`:
+        gf2Match && gf2Match.status==='if_needed'?`
+        <div style="margin-top:12px;padding:8px 12px;background:var(--bg-raised);border-radius:var(--r);font-size:11px;color:var(--ink-3)">
+          🔄 Bracket reset match — only played if LB winner wins Grand Final
+        </div>`:''}
+        ${champion?`<div class="bracket-champion" style="width:200px;margin-top:16px"><div class="bc-label">🏆 Champion</div><div class="bc-name">${champion}</div></div>`:''}
       </div>`;
     }
 
@@ -5968,8 +5998,12 @@ async function commitSeedBracket(playerIds) {
         newMatches.push({ id:genId(), round:r, matchIndex:i, slot:'L', entityA:'TBD', entityB:'TBD', scoreA:0, scoreB:0, status:'scheduled', winnerId:null, loserId:null, date:'', venue:'' });
       }
     }
-    // Grand Final: WB winner (entityA) vs LB winner (entityB)
+    // Grand Final: WB winner (entityA, undefeated) vs LB winner (entityB, one loss)
     newMatches.push({ id:genId(), round:1, matchIndex:0, slot:'GF', entityA:'TBD', entityB:'TBD', scoreA:0, scoreB:0, status:'scheduled', winnerId:null, loserId:null, date:'', venue:'' });
+    // Bracket reset (GF2): only played if LB winner beats WB winner in GF
+    // If GF winner is entityA (WB winner) → tournament over
+    // If GF winner is entityB (LB winner) → GF2 is played (now both have 1 loss)
+    newMatches.push({ id:genId(), round:2, matchIndex:0, slot:'GF', entityA:'TBD', entityB:'TBD', scoreA:0, scoreB:0, status:'if_needed', winnerId:null, loserId:null, date:'', venue:'' });
   }
 
   APP.bracketMatches = newMatches;
@@ -6062,7 +6096,25 @@ function advanceBracket(completedMatch) {
       }
     }
   }
-  // GF winner = champion, nothing to advance
+  // Grand Final progression
+  if (slot === 'GF' && round === 1) {
+    const gf1 = completedMatch;
+    // entityA is the WB finalist (undefeated). entityB is the LB finalist (1 loss).
+    // If WB finalist (entityA) wins → tournament over, they are champion
+    // If LB finalist (entityB) wins → bracket reset (GF2) is needed
+    //   because now WB finalist also has 1 loss — both are equal
+    const wbFinalist = gf1.entityA;
+    const lbFinalist = gf1.entityB;
+    const gf2 = APP.bracketMatches.find(m => m.slot === 'GF' && m.round === 2);
+    if (gf2 && gf1.winnerId === lbFinalist) {
+      // LB finalist won GF1 → activate reset match
+      gf2.entityA = wbFinalist;  // WB finalist (now has 1 loss)
+      gf2.entityB = lbFinalist;  // LB finalist (now has 1 loss)
+      gf2.status  = 'scheduled';
+    }
+    // If WB finalist won → gf2 stays 'if_needed' and is never played
+  }
+  // GF2 winner = champion, nothing more to advance
 }
 // ── ADD BRACKET PLAYER ─────────────────────────────────────
 function openAddBracketPlayer() {
