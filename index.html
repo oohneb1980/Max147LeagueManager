@@ -6078,47 +6078,63 @@ function setNlFmt(fmt,el){
 }
 
 async function createLeague() {
-  const name=document.getElementById('nl-name').value.trim();
-  if(!name){toast('League name is required');return;}
-  const ct = window._nlCt||'league';
+  const name = document.getElementById('nl-name').value.trim();
+  if (!name) { toast('League name is required'); return; }
+
+  const ct = window._nlCt || 'league';
   const isLeagueType = ct === 'league' || ct === 'group_stage';
-  const lg={
-    id:genId(), name,
-    season:document.getElementById('nl-season').value.trim(),
-    description:document.getElementById('nl-desc').value.trim(),
-    format:window._nlFmt||'individual',
-    bestOf:+(document.getElementById('nl-bo')?.value)||7,
-    status:document.getElementById('nl-status').value,
-    // Points only relevant for league/group_stage types
-    pointsWin:  isLeagueType ? +(document.getElementById('nl-pw')?.value||3) : 0,
-    pointsDraw: isLeagueType ? +(document.getElementById('nl-pd')?.value||1) : 0,
-    pointsLose: isLeagueType ? +(document.getElementById('nl-pl')?.value||0) : 0,
-    highBreakThreshold:+(document.getElementById('nl-hbthresh')?.value||50),
-    trackHighBreaks:true,
-    competitionType:ct,
-    groupCount:+(document.getElementById('nl-gc')?.value||4),
-    qualifiersPerGroup:+(document.getElementById('nl-qpg')?.value||1),
-    createdBy: APP.auth.uid || null,
-    createdAt:new Date().toISOString().slice(0,10)
+
+  // Use Math.round() to ensure Firestore receives true integers (not JS floats).
+  // Firestore's `is int` type check rejects 7.0 — it must be 7.
+  const int = (val, def) => Math.round(+(val) || def);
+
+  const lg = {
+    id:          genId(),
+    name,
+    season:      document.getElementById('nl-season').value.trim(),
+    description: document.getElementById('nl-desc').value.trim(),
+    format:      window._nlFmt || 'individual',
+    bestOf:      int(document.getElementById('nl-bo')?.value, 7),
+    status:      document.getElementById('nl-status').value || 'active',
+    competitionType: ct,
+    // Points — required by Firestore rule (isValidLeague) even for KO types
+    pointsWin:   isLeagueType ? int(document.getElementById('nl-pw')?.value, 3)  : 0,
+    pointsDraw:  isLeagueType ? int(document.getElementById('nl-pd')?.value, 1)  : 0,
+    pointsLose:  isLeagueType ? int(document.getElementById('nl-pl')?.value, 0)  : 0,
+    // Group stage config
+    groupCount:         int(document.getElementById('nl-gc')?.value,  4),
+    qualifiersPerGroup: int(document.getElementById('nl-qpg')?.value, 1),
+    // Meta
+    highBreakThreshold: 50,
+    trackHighBreaks:    true,
+    createdBy:   APP.auth.uid || null,
+    createdAt:   new Date().toISOString().slice(0, 10),
   };
-  APP.leagues.unshift(lg);
-  saveLeaguesToLocal();            // save to localStorage immediately
-  closeModal();                    // close modal right away — don't wait for Firestore
-  toast('Creating competition…');
-  render();                        // show it in the hub immediately
 
-  // Claim ownership in memory immediately (before Firestore write)
-  if (APP.auth.uid) {
-    APP.auth.memberships[lg.id] = { role: 'owner' };
+  // Validate required fields before writing
+  if (!lg.createdBy) { toast('You must be signed in to create a competition'); return; }
+  if (!['league','single_elim','double_elim','group_stage'].includes(lg.competitionType)) {
+    toast('Invalid competition type'); return;
   }
+  if (!['individual','team'].includes(lg.format)) { lg.format = 'individual'; }
+  if (!['draft','active','closed'].includes(lg.status)) { lg.status = 'active'; }
 
-  // Write to Firestore in background — failures shown as toast
+  // Update local state immediately — user sees it right away
+  APP.leagues.unshift(lg);
+  APP.auth.memberships[lg.id] = { role: 'owner' };
+  saveLeaguesToLocal();
+  closeModal();
+  toast('Creating competition…');
+  render();
+
+  // Write to Firestore in background
   try {
     await persistLeague(lg);
-    if (APP.auth.uid) await claimCompetitionOwnership(lg.id);
+    await claimCompetitionOwnership(lg.id);
     toast('Competition created ✓');
   } catch(e) {
-    toast('Saved locally — cloud sync pending: ' + (e.message||''));
+    console.error('createLeague Firestore error:', e.code, e.message);
+    toast('Saved locally — sync failed: ' + (e.message || e.code || ''));
   }
 }
 
