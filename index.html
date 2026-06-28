@@ -6269,119 +6269,114 @@ async function saveLeagueConfig(){
 }
 
 // ── PARTICIPANT MODALS ────────────────────────────────────
-// ── ADD PLAYER — from registered members or manually ─────────
-// _pickedUid tracks the selected user account (null = manual entry)
-window._pickedUid = null;
-
 function openAddPlayer(teamId=null) {
   if (!canEditCompetition(APP.activeLeagueId)) { toast("You don't have permission"); return; }
   window._pickedUid = null;
   window._addPlayerTeamId = teamId || null;
+  window._upickUsers = [];  // cached user list for search
 
-  // Build member list — users who have signed up
-  // Load from _allUsers cache if available, else fetch
-  _renderAddPlayerModal([]);
-  if (db) {
-    db.collection('users').orderBy('displayName').get({ source: 'server' })
-      .then(snap => {
-        const users = snap.docs.map(d => ({id:d.id,...d.data()}));
-        _renderAddPlayerModal(users);
-      })
-      .catch(() => _renderAddPlayerModal([]));
-  }
+  // Open modal with structure first, list starts loading
+  openModal('Add player',
+    `<div style="margin-bottom:12px;font-size:13px;color:var(--ink-2)">
+       Select a registered member or add a player manually below.
+     </div>
+
+     <div class="upick-search">
+       <span style="color:var(--ink-3);font-size:15px">🔍</span>
+       <input id="upick-search" placeholder="Search members by name or email…"
+         oninput="filterUserPicker(this.value)" autocomplete="off">
+     </div>
+     <div class="upick-list" id="upick-list">
+       <div style="color:var(--ink-3);font-size:12px;padding:8px 0">Loading members…</div>
+     </div>
+
+     <div class="upick-divider">Or add manually</div>
+     <div class="form-row">
+       <div class="form-field">
+         <label>Name *</label>
+         <input id="mp-name" placeholder="Player name">
+       </div>
+     </div>
+     <div class="form-row c2">
+       <div class="form-field"><label>Email / contact</label>
+         <input id="mp-contact" placeholder="email or phone"></div>
+       <div class="form-field"><label>Handicap</label>
+         <input id="mp-hc" type="number" value="0" min="0" max="147"></div>
+     </div>
+     <div id="mp-selected-note" style="display:none;margin-top:8px;padding:8px 12px;
+       background:var(--gold-muted);border-radius:var(--r);font-size:12px;color:var(--gold)">
+       ✓ Member selected — name and email filled from their profile
+     </div>`,
+    `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="savePlayer()">Add player</button>`
+  );
+
+  // Fetch users and populate the list — updates the list div in-place
+  _loadUserPickerList();
 }
 
-function _renderAddPlayerModal(users) {
-  // Which users are already in this competition?
-  const existingEmails = new Set(APP.players.map(p=>(p.contact||'').toLowerCase().trim()).filter(Boolean));
-  const existingUids   = new Set(APP.players.map(p=>p.uid).filter(Boolean));
+function _loadUserPickerList() {
+  if (!db) {
+    const el = document.getElementById('upick-list');
+    if (el) el.innerHTML = '<div style="color:var(--ink-3);font-size:12px;padding:8px 0">No member data available. Add players manually.</div>';
+    return;
+  }
+  db.collection('users').orderBy('displayName').get({ source: 'server' })
+    .then(snap => {
+      window._upickUsers = snap.docs.map(d => ({id:d.id,...d.data()}));
+      _renderUserPickerList(window._upickUsers, '');
+    })
+    .catch(e => {
+      console.warn('User picker load failed:', e.message);
+      const el = document.getElementById('upick-list');
+      if (el) el.innerHTML = '<div style="color:var(--ink-3);font-size:12px;padding:8px 0">Could not load members. Add players manually.</div>';
+    });
+}
 
-  const rows = users.map(u => {
-    const already = existingUids.has(u.id) || existingEmails.has((u.email||'').toLowerCase());
-    return { u, already };
+function _renderUserPickerList(users, query) {
+  const list = document.getElementById('upick-list');
+  if (!list) return;
+
+  const q = query.toLowerCase().trim();
+  const existingUids   = new Set(APP.players.map(p=>p.uid).filter(Boolean));
+  const existingEmails = new Set(APP.players.map(p=>(p.contact||'').toLowerCase()).filter(Boolean));
+
+  const filtered = users.filter(u => {
+    if (!q) return true;
+    return (u.displayName||'').toLowerCase().includes(q) ||
+           (u.email||'').toLowerCase().includes(q);
   });
 
-  const listHtml = rows.length ? rows.map(({u, already}) => {
-    const clickHandler = already ? '' : `onclick="pickUser('${u.id}')"`;
+  if (!filtered.length) {
+    list.innerHTML = `<div style="color:var(--ink-3);font-size:12px;padding:8px 0">
+      ${q ? `No members match "${q}"` : 'No registered members found.'}
+    </div>`;
+    return;
+  }
+
+  list.innerHTML = filtered.map(u => {
+    const already = existingUids.has(u.id) || existingEmails.has((u.email||'').toLowerCase());
     const initial = (u.displayName||u.email||'?')[0].toUpperCase();
-    return `<div class="upick-row" id="upick-${u.id}" ${clickHandler} style="${already?'opacity:.6;cursor:default':'cursor:pointer'}">
-      <div class="upick-avatar">${initial}</div>
+    const isPicked = window._pickedUid === u.id;
+    return `<div class="upick-row ${isPicked?'selected':''}"
+        id="upick-${u.id}"
+        ${already ? 'style="opacity:.55;cursor:default"' : `onclick="pickUser('${u.id}')" style="cursor:pointer"`}>
+      <div class="upick-avatar">${esc(initial)}</div>
       <div class="upick-info">
         <div class="upick-name">${esc(u.displayName||'—')}</div>
         <div class="upick-email">${esc(u.email||'')}</div>
       </div>
-      <span class="upick-badge ${already?'already':''}">${already?'Already added':'+ Select'}</span>
+      <span class="upick-badge ${already?'already':''}">${already?'Already added':isPicked?'✓ Selected':'+ Add'}</span>
     </div>`;
-  }).join('')
-    : '<div style="color:var(--ink-3);font-size:13px;padding:8px 0">No registered members found. Add players manually below.</div>';
-
-  const body = `
-    <div style="margin-bottom:14px;font-size:13px;color:var(--ink-2)">
-      Select a registered member, or add a player manually below.
-    </div>
-
-    <div class="upick-search">
-      <span style="color:var(--ink-3)">🔍</span>
-      <input id="upick-search" placeholder="Search by name or email…"
-        oninput="filterUserPicker(this.value)">
-    </div>
-    <div class="upick-list" id="upick-list">${listHtml}</div>
-
-    <div class="upick-divider">Or add manually</div>
-    <div class="form-row"><div class="form-field">
-      <label>Name *</label>
-      <input id="mp-name" placeholder="Player name (for non-registered players)">
-    </div></div>
-    <div class="form-row c2">
-      <div class="form-field"><label>Email / contact</label>
-        <input id="mp-contact" placeholder="email or phone"></div>
-      <div class="form-field"><label>Handicap</label>
-        <input id="mp-hc" type="number" value="0" min="0" max="147"></div>
-    </div>
-    <div id="mp-selected-note" style="display:none;margin-top:8px;padding:8px 12px;background:var(--gold-muted);border-radius:var(--r);font-size:12px;color:var(--gold)">
-      ✓ Member selected — name and email filled from their profile
-    </div>`;
-
-  openModal('Add player', body,
-    `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="savePlayer()">Add player</button>`
-  );
-}
-
-function pickUser(uid) {
-  // Deselect previous
-  document.querySelectorAll('.upick-row.picked').forEach(r => {
-    r.classList.remove('picked','selected');
-    const b = r.querySelector('.upick-badge');
-    if (b) { b.textContent='Select'; b.classList.remove('already'); }
-  });
-
-  window._pickedUid = uid;
-  const row = document.getElementById('upick-'+uid);
-  if (row) { row.classList.add('picked','selected'); }
-
-  // Find the user and fill in the form
-  if (db) {
-    db.collection('users').doc(uid).get()
-      .then(d => {
-        if (!d.exists) return;
-        const u = d.data();
-        const nameEl = document.getElementById('mp-name');
-        const contactEl = document.getElementById('mp-contact');
-        if (nameEl) nameEl.value = u.displayName || '';
-        if (contactEl) contactEl.value = u.email || '';
-        const note = document.getElementById('mp-selected-note');
-        if (note) note.style.display = '';
-      });
-  }
+  }).join('');
 }
 
 function filterUserPicker(query) {
-  const q = query.toLowerCase();
-  document.querySelectorAll('#upick-list .upick-row').forEach(row => {
-    const text = row.textContent.toLowerCase();
-    row.style.display = text.includes(q) ? '' : 'none';
-  });
+  // Re-render list with current query — no DOM walk, just regenerate from cache
+  _renderUserPickerList(window._upickUsers || [], query);
+  // Keep search input focused and value intact
+  const inp = document.getElementById('upick-search');
+  if (inp && inp.value !== query) inp.value = query;
 }
 
 async function savePlayer(teamId=null) {
