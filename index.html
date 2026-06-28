@@ -4546,7 +4546,13 @@ async function confirmImport() {
 
   let added = 0;
   for (const row of toAdd) {
-    const p = { id:genId(), name:row.name, contact:row.contact, handicap:row.handicap };
+    const p = {
+      id:genId(),
+      name:row.name,
+      contact:row.contact || '',
+      handicap: Math.round(+row.handicap || 0),
+      uid: null
+    };
     APP.players.push(p);
     await persistInLeague('players', p.id, p);
     added++;
@@ -5546,6 +5552,9 @@ function buildBracketRounds(slot='W') {
 
 // Render a single bracket match node
 function renderBracketMatch(m, opts={}) {
+  // BYE matches: one side is a walkover — show minimal card, greyed out
+  const isBye = m.entityA === 'BYE' || m.entityB === 'BYE';
+
   const aName = getBracketName(m.entityA);
   const bName = getBracketName(m.entityB);
   const aFull = getBracketFullName(m.entityA);
@@ -5555,6 +5564,18 @@ function renderBracketMatch(m, opts={}) {
   const done = m.status==='completed';
   const live = m.status==='live';
   const tbd  = !m.entityA||m.entityA==='TBD'||!m.entityB||m.entityB==='TBD';
+
+  // BYE: auto-completed walkover — show as a slim advancing card
+  if (isBye && done) {
+    const winner = m.winnerId === m.entityA ? aFull : bFull;
+    return `<div class="bracket-match done bye-match" id="bm-${m.id}"
+      data-round="${m.round}" data-idx="${m.matchIndex}" data-slot="${m.slot||'W'}"
+      style="opacity:0.5;pointer-events:none" title="Walkover — ${esc(winner)}">
+      <div class="bracket-player winner"><span class="bp-name">${esc(winner)}</span><span class="bp-score bye-score">W/O</span></div>
+      <div class="bracket-player loser"><span class="bp-name" style="color:var(--ink-3);font-size:11px">BYE</span><span class="bp-score"></span></div>
+    </div>`;
+  }
+
   const cls  = `bracket-match ${live?'live':done?'done':''} ${opts.grandFinal?'grand-final':''} ${tbd?'':'editable'}`;
 
   const aScoreCls = done && aWin ? 'bp-score winning' : 'bp-score';
@@ -5870,6 +5891,35 @@ function renderBracket(isGroupKO=false) {
 }
 
 // ── BRACKET SCORE ENTRY ────────────────────────────────────
+// ── EDIT BRACKET FIXTURE (date/venue) ─────────────────────
+function openEditBracketFixture(matchId) {
+  if (!canEditCompetition(APP.activeLeagueId)) { toast("You don't have permission"); return; }
+  const m = APP.bracketMatches.find(x => x.id === matchId);
+  if (!m) return;
+  const aName = getBracketFullName(m.entityA);
+  const bName = getBracketFullName(m.entityB);
+  openModal(`Fixture details — ${aName} vs ${bName}`,
+    `<div class="form-row c2">
+      <div class="form-field"><label>Date</label><input id="ebf-date" type="date" value="${m.date||''}"></div>
+      <div class="form-field"><label>Venue</label><input id="ebf-venue" value="${esc(m.venue||'')}" placeholder="Venue"></div>
+    </div>`,
+    `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="saveEditBracketFixture('${matchId}')">Save</button>`
+  );
+}
+async function saveEditBracketFixture(matchId) {
+  const m = APP.bracketMatches.find(x => x.id === matchId);
+  if (!m) return;
+  m.date  = document.getElementById('ebf-date')?.value  || '';
+  m.venue = document.getElementById('ebf-venue')?.value.trim() || '';
+  await persistInLeague('bracketMatches', matchId, m);
+  saveActiveToLocal();
+  closeModal();
+  toast('Fixture details updated ✓');
+  render();
+}
+
+
 function openBracketScoreEntry(matchId) {
   const m = APP.bracketMatches.find(x=>x.id===matchId);
   if (!m) return;
@@ -5979,11 +6029,16 @@ function openSeedBracket() {
     return;
   }
 
-  // Bracket sizes: power of 2, at least as large as player count
-  const sizes = [2,4,8,16,32].filter(s => s >= players.length);
-  const sz = sizes[0] || 32;
-  const shuffled = [...players].sort(() => Math.random() - 0.5).slice(0, sz);
-  // Pad with BYEs if needed
+  // Find smallest power of 2 >= player count (fewest BYEs possible)
+  // 10 players → 16 slots would give 6 BYEs — instead we use 2^ceil(log2(n))
+  const n = players.length;
+  let sz = 2;
+  while (sz < n) sz *= 2;  // e.g. 10 players → sz = 16... still too many
+  // Actually for 10 players the bracket MUST be a power of 2 for the structure to work.
+  // But we minimise dummy matches: 10→16 gives 6 BYEs. We auto-advance BYE matches
+  // so they're invisible — only 10 actual players ever play.
+  const shuffled = [...players].sort(() => Math.random() - 0.5);
+  // Pad with BYEs
   while (shuffled.length < sz) shuffled.push({id:'BYE', name:'Bye'});
 
   window._pendingSeeds = shuffled.map(p => p.id);
@@ -6858,16 +6913,28 @@ async function saveTeam(){
 }
 
 function openAddPlayerToTeam(teamId){
-  const team=APP.teams.find(t=>t.id===teamId);
-  const avail=APP.players.filter(p=>!(team.players||[]).includes(p.id));
-  openModal(`Add player to ${team.name}`,
-    `${avail.length?`<div class="form-field" style="margin-bottom:14px"><label>Existing player</label>
-      <select id="mp-existing"><option value="">— Select —</option>${avail.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></div>`:''}
-    <div class="alert alert-info">Or create new:</div>
-    <div class="form-row"><div class="form-field"><label>Name *</label><input id="np-name" placeholder="Player name"></div></div>
+  const team = APP.teams.find(t=>t.id===teamId);
+  if (!team) { toast('Team not found'); return; }
+  // Available players = players NOT already in this specific team
+  const avail = APP.players.filter(p => !(team.players||[]).includes(p.id));
+
+  openModal(`Add player to ${esc(team.name)}`,
+    `${avail.length ? `
+    <div class="form-field" style="margin-bottom:14px">
+      <label>Add existing player to team</label>
+      <select id="mp-existing" style="font-size:13px">
+        <option value="">— Choose a player —</option>
+        ${avail.map(p=>`<option value="${p.id}">${esc(p.name)}${p.contact?' ('+esc(p.contact)+')':''}</option>`).join('')}
+      </select>
+    </div>
+    <div style="text-align:center;font-size:12px;color:var(--ink-3);margin:10px 0">— or create a new player —</div>
+    ` : `<div class="alert alert-info" style="margin-bottom:12px">All players are already in a team. Create a new player below.</div>`}
+    <div class="form-row">
+      <div class="form-field"><label>Name</label><input id="np-name" placeholder="New player name"></div>
+    </div>
     <div class="form-row c2">
-      <div class="form-field"><label>Contact</label><input id="np-contact"></div>
-      <div class="form-field"><label>Handicap</label><input id="np-hc" type="number" value="0"></div>
+      <div class="form-field"><label>Contact</label><input id="np-contact" placeholder="email or phone"></div>
+      <div class="form-field"><label>Handicap</label><input id="np-hc" type="number" value="0" min="0" max="147"></div>
     </div>`,
     `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
      <button class="btn btn-primary" onclick="addPlayerToTeam('${teamId}')">Add to team</button>`
@@ -7041,10 +7108,11 @@ async function saveScore(matchId){
 
   await persistInLeague('matches', matchId, m);
   if (m.status === 'completed') await extractAndSaveBreaks(m);
-  saveActiveToLocal();  // ── Item 11: ensure leaderboard reflects new score
+  saveActiveToLocal();  // ensure leaderboard reads updated localStorage
   closeModal();
   toast('Score saved ✓');
-  render();  // re-render current tab so leaderboard updates immediately
+  // Re-render immediately — if on fixtures tab, stay there; otherwise update
+  render();
 }
 
 function openFrameLog(matchId){
