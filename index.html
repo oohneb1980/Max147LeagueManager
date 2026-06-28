@@ -6397,6 +6397,26 @@ function filterUserPicker(query) {
   if (inp && inp.value !== query) inp.value = query;
 }
 
+function pickUser(uid) {
+  window._pickedUid = uid;
+
+  // Fill form from cache — no extra Firestore call needed
+  const u = (window._upickUsers || []).find(x => x.id === uid);
+  if (u) {
+    const nameEl    = document.getElementById('mp-name');
+    const contactEl = document.getElementById('mp-contact');
+    if (nameEl)    nameEl.value    = u.displayName || '';
+    if (contactEl) contactEl.value = u.email || '';
+    const note = document.getElementById('mp-selected-note');
+    if (note) note.style.display = '';
+    if (nameEl) nameEl.focus();
+  }
+
+  // Re-render list to show ✓ Selected state — preserve current search
+  const q = document.getElementById('upick-search')?.value || '';
+  _renderUserPickerList(window._upickUsers || [], q);
+}
+
 async function savePlayer(teamId=null) {
   const resolvedTeamId = teamId || window._addPlayerTeamId;
   const name    = document.getElementById('mp-name')?.value.trim();
