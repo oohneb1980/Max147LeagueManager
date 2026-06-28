@@ -4731,17 +4731,23 @@ function exportParticipants() {
   const wb = XLSX.utils.book_new();
 
   if (isTeam) {
-    const header = ['Team Name','Venue','Players'];
-    const rows = APP.teams.map(t => {
-      const names = (t.players||[]).map(pid => {
-        const p = APP.players.find(x=>x.id===pid);
-        return p ? p.name : pid;
-      }).join(', ');
-      return [t.name, t.venue||'', names];
+    // One row per player — same format as the import template
+    const header = ['Team Name','Venue','Player Name','Contact','Handicap'];
+    const rows = [];
+    APP.teams.forEach(t => {
+      const teamPlayers = (t.players||[]).map(pid => APP.players.find(x=>x.id===pid)).filter(Boolean);
+      if (!teamPlayers.length) {
+        // Team with no players — still export the team row
+        rows.push([t.name, t.venue||'', '', '', '']);
+      } else {
+        teamPlayers.forEach(p => {
+          rows.push([t.name, t.venue||'', p.name, p.contact||'', p.handicap||0]);
+        });
+      }
     });
     const ws = XLSX.utils.aoa_to_sheet([header,...rows]);
-    ws['!cols'] = [{wch:24},{wch:16},{wch:48}];
-    XLSX.utils.book_append_sheet(wb, ws, 'Teams');
+    ws['!cols'] = [{wch:20},{wch:14},{wch:24},{wch:26},{wch:10}];
+    XLSX.utils.book_append_sheet(wb, ws, 'Teams & Players');
   } else {
     const header = ['Name','Contact','Handicap'];
     const rows = APP.players.map(p => [p.name, p.contact||'', p.handicap||0]);
@@ -7064,33 +7070,51 @@ async function saveTeam(){
   closeModal(); toast('Team added ✓'); render();
 }
 
-function openAddPlayerToTeam(teamId){
-  const team = APP.teams.find(t=>t.id===teamId);
+function openAddPlayerToTeam(teamId) {
+  if (!canEditCompetition(APP.activeLeagueId)) { toast("You don't have permission"); return; }
+  const team = APP.teams.find(t => t.id === teamId);
   if (!team) { toast('Team not found'); return; }
-  // Available players = players NOT already in this specific team
-  const avail = APP.players.filter(p => !(team.players||[]).includes(p.id));
+
+  window._pickedUid       = null;
+  window._addPlayerTeamId = teamId;
+  window._upickUsers      = [];
 
   openModal(`Add player to ${esc(team.name)}`,
-    `${avail.length ? `
-    <div class="form-field" style="margin-bottom:14px">
-      <label>Add existing player to team</label>
-      <select id="mp-existing" style="font-size:13px">
-        <option value="">— Choose a player —</option>
-        ${avail.map(p=>`<option value="${p.id}">${esc(p.name)}${p.contact?' ('+esc(p.contact)+')':''}</option>`).join('')}
-      </select>
-    </div>
-    <div style="text-align:center;font-size:12px;color:var(--ink-3);margin:10px 0">— or create a new player —</div>
-    ` : `<div class="alert alert-info" style="margin-bottom:12px">All players are already in a team. Create a new player below.</div>`}
-    <div class="form-row">
-      <div class="form-field"><label>Name</label><input id="np-name" placeholder="New player name"></div>
-    </div>
-    <div class="form-row c2">
-      <div class="form-field"><label>Contact</label><input id="np-contact" placeholder="email or phone"></div>
-      <div class="form-field"><label>Handicap</label><input id="np-hc" type="number" value="0" min="0" max="147"></div>
-    </div>`,
+    `<div style="margin-bottom:10px;font-size:13px;color:var(--ink-2)">
+       Search registered members or add a player manually.
+     </div>
+
+     <div class="upick-search">
+       <span style="color:var(--ink-3);font-size:15px">🔍</span>
+       <input id="upick-search" placeholder="Search members by name or email…"
+         oninput="filterUserPicker(this.value)" autocomplete="off">
+     </div>
+     <div class="upick-list" id="upick-list">
+       <div style="color:var(--ink-3);font-size:12px;padding:8px 0">Loading members…</div>
+     </div>
+
+     <div class="upick-divider">Or add manually</div>
+     <div class="form-row">
+       <div class="form-field">
+         <label>Name *</label>
+         <input id="mp-name" placeholder="Player name">
+       </div>
+     </div>
+     <div class="form-row c2">
+       <div class="form-field"><label>Contact</label>
+         <input id="mp-contact" placeholder="email or phone"></div>
+       <div class="form-field"><label>Handicap</label>
+         <input id="mp-hc" type="number" value="0" min="0" max="147"></div>
+     </div>
+     <div id="mp-selected-note" style="display:none;margin-top:8px;padding:8px 12px;
+       background:var(--gold-muted);border-radius:var(--r);font-size:12px;color:var(--gold)">
+       ✓ Member selected — name and email filled from their profile
+     </div>`,
     `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="addPlayerToTeam('${teamId}')">Add to team</button>`
+     <button class="btn btn-primary" onclick="savePlayer('${teamId}')">Add to team</button>`
   );
+
+  _loadUserPickerList();
 }
 async function addPlayerToTeam(teamId){
   const team=APP.teams.find(t=>t.id===teamId);
