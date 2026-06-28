@@ -1015,22 +1015,28 @@ tbody tr:nth-child(n+6){ animation-delay: 100ms;}
 /* Round column */
 .bracket-round {
   display: inline-flex; flex-direction: column;
-  gap: 0; vertical-align: top;
-  position: relative;
+  vertical-align: top; position: relative;
+  /* Each round is a fixed-height column;
+     matches are evenly distributed with space-around */
 }
 .bracket-round-label {
   font-size: 11px; font-weight: 600; color: var(--gold);
-  padding: 0 0 10px 8px; white-space: nowrap;
-  height: 28px; display: flex; align-items: flex-end;
+  padding: 0 0 6px 8px; white-space: nowrap;
+  height: 24px; display: flex; align-items: flex-end;
+  flex-shrink: 0;
+}
+.bracket-slots {
+  display: flex; flex-direction: column;
+  justify-content: space-around; flex: 1;
 }
 .bracket-slot-spacer { flex: 1; }
 /* Match node */
 .bracket-match {
-  width: 168px; margin: 0 28px;
+  width: 180px; margin: 0 24px;
   background: var(--bg-card); border: 1px solid var(--border);
   border-radius: var(--r); overflow: hidden;
   cursor: pointer; transition: border-color .12s;
-  flex-shrink: 0;
+  flex-shrink: 0; position: relative; z-index: 1;
 }
 .bracket-match.live   { border-color: rgba(63,191,122,.4); }
 .bracket-match.done   { border-color: var(--border-2); }
@@ -5564,103 +5570,76 @@ function renderBracketMatch(m, opts={}) {
 // Calculate positions for connector line drawing
 // Returns array of {x1,y1,x2,y2} for each line
 function drawBracketLines() {
-  const svg = document.getElementById('bracket-svg-w');
+  _drawLines('bracket-svg-w', buildBracketRounds('W'), 'rgba(201,168,76,0.4)');
+  _drawLines('bracket-svg-l', buildBracketRounds('L'), 'rgba(224,82,82,0.4)');
+}
+
+function _drawLines(svgId, rounds, stroke) {
+  const svg = document.getElementById(svgId);
   if (!svg) return;
-  const svgCanvas = svg.closest('.bracket-canvas');
-  if (!svgCanvas) return;  // SVG not inside bracket-canvas yet — bail
+  const canvas = svg.closest('.bracket-canvas');
+  if (!canvas) return;
+  const cr = canvas.getBoundingClientRect();
+  if (!cr || !cr.width) return;
 
-  svg.innerHTML = '';
+  // Build paths as a single string — faster than many innerHTML appends
+  let paths = '';
 
-  const rounds = buildBracketRounds('W');
   for (let r = 0; r < rounds.length - 1; r++) {
-    const curRound  = rounds[r];
-    const nextRound = rounds[r + 1];
-    for (let i = 0; i < nextRound.length; i++) {
-      const topMatch  = curRound[i * 2];
-      const botMatch  = curRound[i * 2 + 1];
-      const nextMatch = nextRound[i];
-      if (!topMatch || !nextMatch) continue;
+    const cur  = rounds[r];
+    const next = rounds[r + 1];
 
-      const topEl  = document.getElementById('bm-' + topMatch.id);
-      const nextEl = document.getElementById('bm-' + nextMatch.id);
-      const botEl  = botMatch ? document.getElementById('bm-' + botMatch.id) : null;
+    for (let i = 0; i < next.length; i++) {
+      const topM  = cur[i * 2];
+      const botM  = cur[i * 2 + 1];
+      const nextM = next[i];
+      if (!topM || !nextM) continue;
 
-      // Guard every element — any null means this connector can't be drawn
+      const topEl  = document.getElementById('bm-' + topM.id);
+      const nextEl = document.getElementById('bm-' + nextM.id);
       if (!topEl || !nextEl) continue;
-      const svgRect  = svgCanvas.getBoundingClientRect();
-      if (!svgRect || !svgRect.width) continue;  // not visible yet
 
-      const topRect  = topEl.getBoundingClientRect();
-      const nextRect = nextEl.getBoundingClientRect();
+      const topR  = topEl.getBoundingClientRect();
+      const nextR = nextEl.getBoundingClientRect();
 
-      const x1   = topRect.right  - svgRect.left;
-      const y1   = topRect.top + topRect.height / 2 - svgRect.top;
-      const x2   = nextRect.left  - svgRect.left;
-      const y2   = nextRect.top + nextRect.height / 2 - svgRect.top;
-      const midX = x1 + (x2 - x1) * 0.5;
+      // Exit point: right-centre of source match
+      const x1 = topR.right  - cr.left;
+      const y1 = topR.top + topR.height / 2 - cr.top;
+      // Entry point: left-centre of destination match
+      const x2 = nextR.left  - cr.left;
+      const y2 = nextR.top + nextR.height / 2 - cr.top;
 
-      svg.innerHTML += `<path d="M${x1},${y1} L${midX},${y1} L${midX},${y2} L${x2},${y2}"
-        stroke="rgba(201,168,76,0.25)" stroke-width="1.5" fill="none"
-        stroke-linecap="round" stroke-linejoin="round"/>`;
+      // Elbow connector — step 40% of the gap, then go vertical, then step to entry
+      const elbowX = x1 + (x2 - x1) * 0.5;
 
-      if (botEl) {
-        const botRect = botEl.getBoundingClientRect();
-        const xb1 = botRect.right - svgRect.left;
-        const yb1 = botRect.top + botRect.height / 2 - svgRect.top;
-        svg.innerHTML += `<path d="M${xb1},${yb1} L${midX},${yb1} L${midX},${y2}"
-          stroke="rgba(201,168,76,0.25)" stroke-width="1.5" fill="none"
-          stroke-linecap="round" stroke-linejoin="round"/>`;
+      // Top match → elbow
+      paths += `<path d="M${x1},${y1} H${elbowX}" stroke="${stroke}" stroke-width="2" fill="none" stroke-linecap="round"/>`;
+
+      // Bottom match → same elbow (merges with top)
+      if (botM) {
+        const botEl = document.getElementById('bm-' + botM.id);
+        if (botEl) {
+          const botR = botEl.getBoundingClientRect();
+          const xb1 = botR.right - cr.left;
+          const yb1 = botR.top + botR.height / 2 - cr.top;
+          paths += `<path d="M${xb1},${yb1} H${elbowX}" stroke="${stroke}" stroke-width="2" fill="none" stroke-linecap="round"/>`;
+          // Vertical joining bar between top and bottom at elbow
+          paths += `<path d="M${elbowX},${y1} V${yb1}" stroke="${stroke}" stroke-width="2" fill="none"/>`;
+          // Horizontal from midpoint of the vertical bar to next match
+          const midY = (y1 + yb1) / 2;
+          paths += `<path d="M${elbowX},${midY} H${x2}" stroke="${stroke}" stroke-width="2" fill="none" stroke-linecap="round"/>`;
+          // Small dot at junction
+          paths += `<circle cx="${elbowX}" cy="${midY}" r="2.5" fill="${stroke}"/>`;
+        }
+      } else {
+        // Only one feeder (bye or odd bracket) — straight line
+        paths += `<path d="M${elbowX},${y1} H${x2}" stroke="${stroke}" stroke-width="2" fill="none" stroke-linecap="round"/>`;
       }
     }
   }
 
-  // Losers bracket lines
-  const svgL = document.getElementById('bracket-svg-l');
-  if (!svgL) return;
-  const svgLCanvas = svgL.closest('.bracket-canvas');
-  if (!svgLCanvas) return;
-
-  svgL.innerHTML = '';
-  const lRounds = buildBracketRounds('L');
-  for (let r = 0; r < lRounds.length - 1; r++) {
-    const curRound  = lRounds[r];
-    const nextRound = lRounds[r + 1];
-    for (let i = 0; i < nextRound.length; i++) {
-      const topMatch  = curRound[i * 2];
-      const botMatch  = curRound[i * 2 + 1];
-      const nextMatch = nextRound[i];
-      if (!topMatch || !nextMatch) continue;
-
-      const topEl  = document.getElementById('bm-' + topMatch.id);
-      const nextEl = document.getElementById('bm-' + nextMatch.id);
-      const botEl  = botMatch ? document.getElementById('bm-' + botMatch.id) : null;
-
-      if (!topEl || !nextEl) continue;
-      const svgRect  = svgLCanvas.getBoundingClientRect();
-      if (!svgRect || !svgRect.width) continue;
-
-      const topRect  = topEl.getBoundingClientRect();
-      const nextRect = nextEl.getBoundingClientRect();
-      const x1   = topRect.right  - svgRect.left;
-      const y1   = topRect.top + topRect.height / 2 - svgRect.top;
-      const x2   = nextRect.left  - svgRect.left;
-      const y2   = nextRect.top + nextRect.height / 2 - svgRect.top;
-      const midX = x1 + (x2 - x1) * 0.5;
-
-      svgL.innerHTML += `<path d="M${x1},${y1} L${midX},${y1} L${midX},${y2} L${x2},${y2}"
-        stroke="rgba(224,82,82,0.25)" stroke-width="1.5" fill="none"
-        stroke-linecap="round" stroke-linejoin="round"/>`;
-
-      if (botEl) {
-        const botRect = botEl.getBoundingClientRect();
-        const xb1 = botRect.right - svgRect.left;
-        const yb1 = botRect.top + botRect.height / 2 - svgRect.top;
-        svgL.innerHTML += `<path d="M${xb1},${yb1} L${midX},${yb1} L${midX},${y2}"
-          stroke="rgba(224,82,82,0.25)" stroke-width="1.5" fill="none"
-          stroke-linecap="round" stroke-linejoin="round"/>`;
-      }
-    }
-  }
+  // Set all paths at once
+  svg.innerHTML = paths;
 }
 
 // Get round label
@@ -5718,20 +5697,22 @@ function renderBracket(isGroupKO=false) {
   let wBracketHTML = `<div style="display:flex;align-items:flex-start;gap:0;position:relative">
     <svg id="bracket-svg-w" class="bracket-svg" width="100%" height="100%"></svg>`;
 
+  // Use the first round's count to determine the canonical bracket height
+  // Every subsequent round halves the matches — height stays fixed so
+  // SVG connectors always bisect cleanly between pairs
+  const baseMatchCount = wRounds.length ? wRounds[0].length : 1;
+  const SLOT_H = 110; // px per match slot — tall enough to avoid overlap
+  const BRACKET_H = baseMatchCount * SLOT_H; // fixed height for all rounds
+
   wRounds.forEach((round, ri) => {
     const rNum = ri+1;
-    const matchCount = round.length;
-    const slotHeight = Math.max(80, 220 / matchCount);
-    const totalH = matchCount * slotHeight + (matchCount-1) * slotHeight * 0.5;
-
-    wBracketHTML += `<div class="bracket-round" style="min-height:${totalH+28}px">
-      <div class="bracket-round-label">${roundLabel(rNum, wTotal, 'W')}</div>`;
-
-    round.forEach((m, mi) => {
-      const topPad = mi===0 ? slotHeight*0.4 : slotHeight*0.8;
-      wBracketHTML += `<div style="padding-top:${topPad}px">${renderBracketMatch(m)}</div>`;
+    wBracketHTML += `<div class="bracket-round" style="height:${BRACKET_H + 24}px">
+      <div class="bracket-round-label">${roundLabel(rNum, wTotal, 'W')}</div>
+      <div class="bracket-slots">`;
+    round.forEach(m => {
+      wBracketHTML += `<div style="display:flex;align-items:center">${renderBracketMatch(m)}</div>`;
     });
-    wBracketHTML += `</div>`;
+    wBracketHTML += `</div></div>`;
   });
 
   // Champion column
@@ -5752,18 +5733,17 @@ function renderBracket(isGroupKO=false) {
       <div style="display:flex;align-items:flex-start;gap:0;position:relative">
         <svg id="bracket-svg-l" class="bracket-svg" width="100%" height="100%"></svg>`;
 
+    const lBaseCount = lRounds.length ? lRounds[0].length : 1;
+    const L_BRACKET_H = lBaseCount * SLOT_H;
     lRounds.forEach((round, ri) => {
       const rNum = ri+1;
-      const matchCount = round.length;
-      const slotH = Math.max(80, 180/matchCount);
-      const totalH = matchCount * slotH + (matchCount-1)*slotH*0.5;
-      lBracketHTML += `<div class="bracket-round" style="min-height:${totalH+28}px">
-        <div class="bracket-round-label" style="color:var(--red)">${roundLabel(rNum,lTotal,'L')}</div>`;
-      round.forEach((m,mi)=>{
-        const topPad = mi===0 ? slotH*0.4 : slotH*0.8;
-        lBracketHTML += `<div style="padding-top:${topPad}px">${renderBracketMatch(m)}</div>`;
+      lBracketHTML += `<div class="bracket-round" style="height:${L_BRACKET_H + 24}px">
+        <div class="bracket-round-label" style="color:var(--red)">${roundLabel(rNum,lTotal,'L')}</div>
+        <div class="bracket-slots">`;
+      round.forEach(m => {
+        lBracketHTML += `<div style="display:flex;align-items:center">${renderBracketMatch(m)}</div>`;
       });
-      lBracketHTML += `</div>`;
+      lBracketHTML += `</div></div>`;
     });
     lBracketHTML += `</div>`;
 
