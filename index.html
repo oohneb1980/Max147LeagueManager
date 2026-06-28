@@ -1602,7 +1602,7 @@ const APP = {
   dashTab: 'standings',
   sortCol: 'pts', sortDir: -1,
   openTeams: {},
-  hubFilter: { active:true, draft:true, closed:false },
+  hubFilter: { active:true, draft:true, closed:false, mineOnly:false },
   umFilter: 'all',   // user management role filter: 'all'|'super_admin'|'player'
   umSearch: '',      // user management search string
   gsPhase: 'groups',  // group_stage phase: 'groups' | 'knockout'
@@ -3569,20 +3569,37 @@ function toggleHubFilter(key) {
 
 function renderHub() {
   const f = APP.hubFilter;
-  const nActive = APP.leagues.filter(l=>(l.status||'active')==='active').length;
-  const nDraft  = APP.leagues.filter(l=>l.status==='draft').length;
-  const nClosed = APP.leagues.filter(l=>l.status==='closed'||l.status==='archived').length;
-  const total   = APP.leagues.length;
 
-  const visible = APP.leagues.filter(lg => {
-    // Normalise legacy 'archived' to 'closed'
-    if (lg.status === 'archived') lg.status = 'closed';
+  // ── Determine which leagues this user can see ──────────
+  // Super admin: all leagues
+  // Owner / player: only leagues they are enrolled in (have a membership)
+  // Guest: only public (show all — they can view dashboards)
+  const userLeagues = APP.leagues.filter(lg => {
+    if (lg.status === 'archived') lg.status = 'closed'; // normalise
+    if (isSuperAdmin()) return true;
+    if (!isLoggedIn()) return true; // guests see all (read-only dashboards)
+    // Logged-in non-admin: only show competitions they're connected to
+    // (own, enrolled in, or created by them)
+    return canEditCompetition(lg.id) ||
+           isLeagueMember(lg.id) ||
+           lg.createdBy === APP.auth.uid;
+  });
+
+  // ── Apply status + ownership filter ───────────────────
+  const visible = userLeagues.filter(lg => {
     const s = lg.status || 'active';
     if (s==='active' && !f.active) return false;
     if (s==='draft'  && !f.draft)  return false;
     if (s==='closed' && !f.closed) return false;
+    // "Mine only" — show only competitions I own or created
+    if (f.mineOnly && !canEditCompetition(lg.id) && lg.createdBy !== APP.auth.uid) return false;
     return true;
   });
+
+  const nActive = userLeagues.filter(l=>(l.status||'active')==='active').length;
+  const nDraft  = userLeagues.filter(l=>l.status==='draft').length;
+  const nClosed = userLeagues.filter(l=>l.status==='closed').length;
+  const total   = userLeagues.length;
 
   let cards = visible.map(lg=>{
     const st  = leagueStats(lg);
@@ -3598,7 +3615,7 @@ function renderHub() {
     <div class="league-card" data-ct="${ct}" onclick="openLeague('${lg.id}')" style="${isClosed?'opacity:.72':''}">
       <div class="lc-top">
         <div>
-          <div class="lc-name">${esc(lg.name)}</div>
+          <div class="lc-name">${esc(lg.name)}${!canEditCompetition(lg.id)&&isLeagueMember(lg.id)?'<span style="font-size:10px;color:var(--blue);margin-left:6px;font-weight:500">enrolled</span>':''}</div>
           <div class="lc-meta">
             <span>📅 ${lg.season||'—'}</span>
             ${lg.description?`<span style="color:var(--ink-3)">${esc(lg.description)}</span>`:''}
@@ -3617,6 +3634,7 @@ function renderHub() {
       </div>
       <div class="lc-foot">
         <button class="lc-open-btn" onclick="event.stopPropagation();openLeague('${lg.id}')">Open →</button>
+        ${canEditCompetition(lg.id)?`
         <div class="lc-actions" onclick="event.stopPropagation()">
           <button class="btn-icon" title="Edit"      onclick="openEditLeague('${lg.id}')">✏️</button>
           <button class="btn-icon" title="Duplicate" onclick="duplicateLeague('${lg.id}')">📋</button>
@@ -3624,8 +3642,8 @@ function renderHub() {
             onclick="${isClosed?`reopenCompetition('${lg.id}')`:`closeCompetition('${lg.id}')`}">
             ${isClosed?'🔓':'🔒'}
           </button>
-          <button class="btn-icon" title="Delete" style="color:var(--red)" onclick="deleteLeague('${lg.id}')">🗑️</button>
-        </div>
+          ${isSuperAdmin()?`<button class="btn-icon" title="Delete" style="color:var(--red)" onclick="deleteLeague('${lg.id}')">🗑️</button>`:''}
+        </div>`:''}
       </div>
     </div>`;
   }).join('');
@@ -3657,6 +3675,9 @@ function renderHub() {
       <button class="filter-tog ${f.closed?'on':''}" onclick="toggleHubFilter('closed')">
         Closed${nClosed?` <span style="font-size:10px;opacity:.65">(${nClosed})</span>`:''}
       </button>
+      ${isLoggedIn()?`<button class="filter-tog ${f.mineOnly?'on':''}" onclick="toggleHubFilter('mineOnly')" title="Show only competitions you own or created">
+        👤 Mine only
+      </button>`:''}
     </div>
     <span style="font-size:12px;color:var(--ink-3)">${total} total${hiddenCount?` &nbsp;·&nbsp; ${hiddenCount} hidden`:''}</span>
   </div>
@@ -6194,6 +6215,7 @@ async function createLeague() {
 }
 
 function openEditLeague(id) {
+  if (!canEditCompetition(id)) { toast("You don't have permission to edit this competition"); return; }
   const lg=APP.leagues.find(l=>l.id===id);
   openModal(`Edit — ${lg.name}`,
     `<div class="form-row c2">
@@ -6224,6 +6246,7 @@ function openEditLeague(id) {
 }
 
 async function saveEditLeague(id){
+  if (!canEditCompetition(id)) { toast("You don't have permission"); return; }
   const lg=APP.leagues.find(l=>l.id===id);
   lg.name=document.getElementById('el-name').value.trim()||lg.name;
   lg.season=document.getElementById('el-season').value.trim();
@@ -6238,17 +6261,20 @@ async function saveEditLeague(id){
 }
 
 async function closeCompetition(id){
+  if (!canEditCompetition(id)) { toast("You don't have permission"); return; }
   const lg=APP.leagues.find(l=>l.id===id);
   lg.status='closed';
   await persistLeague(lg); toast('Competition closed'); render();
 }
 async function reopenCompetition(id){
+  if (!canEditCompetition(id)) { toast("You don't have permission"); return; }
   const lg=APP.leagues.find(l=>l.id===id);
   lg.status='active';
   await persistLeague(lg); toast('Competition reopened'); render();
 }
 
 async function duplicateLeague(id){
+  if (!canEditCompetition(id)) { toast("You don't have permission"); return; }
   const src=APP.leagues.find(l=>l.id===id);
   const clone={...src, id:genId(), name:src.name+' (copy)', status:'draft', createdAt:new Date().toISOString().slice(0,10)};
   APP.leagues.unshift(clone);
@@ -6257,6 +6283,7 @@ async function duplicateLeague(id){
 }
 
 async function deleteLeague(id){
+  if (!isSuperAdmin()) { toast('Only Super Admins can delete competitions'); return; }
   if(!confirm('Delete this league and all its data? This cannot be undone.'))return;
   APP.leagues=APP.leagues.filter(l=>l.id!==id);
   await deleteLeagueAll(id);
