@@ -5921,200 +5921,149 @@ async function saveBracketScore(matchId) {
   render();
 }
 
-function advanceBracket(completedMatch) {
-  if (!completedMatch.winnerId) return;
-  const {round, matchIndex, slot, winnerId, loserId} = completedMatch;
-  const isDouble = APP.config.competitionType === 'double_elim';
-
-  // Find the next winners bracket match
-  const wMatches = APP.bracketMatches.filter(m=>m.slot==='W'||(m.slot!=='L'&&m.slot!=='GF'));
-  const nextRound = round + 1;
-  const nextMatchIdx = Math.floor(matchIndex / 2);
-  const isTopSeed = matchIndex % 2 === 0; // top slot feeds entityA, bottom feeds entityB
-
-  const nextMatch = APP.bracketMatches.find(m=>
-    (m.slot===slot||(!m.slot&&slot==='W')||slot==='W') &&
-    m.round===nextRound && m.matchIndex===nextMatchIdx
-  );
-
-  if (nextMatch) {
-    if (isTopSeed) { if (nextMatch.entityA==='TBD') nextMatch.entityA = winnerId; }
-    else           { if (nextMatch.entityB==='TBD') nextMatch.entityB = winnerId; }
-    if (nextMatch.entityA && nextMatch.entityB && nextMatch.entityA!=='TBD' && nextMatch.entityB!=='TBD') {
-      nextMatch.status = 'scheduled';
-    }
-  }
-
-  // Double elimination: route loser to losers bracket
-  if (isDouble && loserId) {
-    // Find a scheduled losers bracket match with a TBD slot in round 1
-    // Simple heuristic: find first LB match in next round that still has a TBD slot
-    const lbMatch = APP.bracketMatches.find(m=>
-      m.slot==='L' && m.round===round && m.matchIndex===nextMatchIdx &&
-      (m.entityA==='TBD'||m.entityB==='TBD')
-    );
-    if (lbMatch) {
-      if (lbMatch.entityA==='TBD') lbMatch.entityA = loserId;
-      else if (lbMatch.entityB==='TBD') lbMatch.entityB = loserId;
-      if (lbMatch.entityA!=='TBD'&&lbMatch.entityB!=='TBD') lbMatch.status='scheduled';
-    }
-  }
-}
-
-// ── EDIT BRACKET FIXTURE DETAILS ──────────────────────────
-function openEditBracketFixture(matchId) {
-  const m = APP.bracketMatches.find(x=>x.id===matchId);
-  if (!m) return;
-  const aName = getBracketFullName(m.entityA);
-  const bName = getBracketFullName(m.entityB);
-  openModal(`Fixture details — ${aName} vs ${bName}`,
-    `<div class="form-row c2">
-      <div class="form-field"><label>Date</label><input id="ebf-date" type="date" value="${m.date||''}"></div>
-      <div class="form-field"><label>Status</label>
-        <select id="ebf-status">
-          <option value="scheduled" ${m.status==='scheduled'?'selected':''}>Scheduled</option>
-          <option value="live" ${m.status==='live'?'selected':''}>Live</option>
-        </select>
-      </div>
-    </div>
-    <div class="form-field"><label>Venue</label><input id="ebf-venue" placeholder="Venue" value="${m.venue&&m.venue!=='TBD'?m.venue:''}"></div>`,
-    `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveBracketFixtureDetails('${matchId}')">Save</button>`
-  );
-}
-
-async function saveBracketFixtureDetails(matchId) {
-  const m = APP.bracketMatches.find(x=>x.id===matchId);
-  m.date   = document.getElementById('ebf-date').value;
-  m.venue  = document.getElementById('ebf-venue').value.trim();
-  m.status = document.getElementById('ebf-status').value;
-  await persistInLeague('bracketMatches', matchId, m);
-  saveActiveToLocal();
-  closeModal(); toast('Details saved ✓'); render();
-}
-
-// ── SEED BRACKET ──────────────────────────────────────────
-function openSeedBracket() {
-  if (!canEditCompetition(APP.activeLeagueId)) { toast("You don't have permission"); return; }
-  const players = APP.players;
-  if (players.length < 2) {
-    openModal('No players yet',
-      `<div style="text-align:center;padding:16px 0">
-        <div style="font-size:40px;margin-bottom:12px">👥</div>
-        <div style="font-size:14px;color:var(--ink-2);line-height:1.6;margin-bottom:4px">
-          Add at least 2 players in the <strong>Participants</strong> tab before seeding the bracket.
-        </div>
-      </div>`,
-      `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-       <button class="btn btn-primary" onclick="closeModal();nav('participants')">Go to Participants →</button>`
-    );
-    return;
-  }
-  // Supported sizes: 4, 8, 16
-  const sizes = [4,8,16].filter(s=>s>=players.length);
-  const sz = sizes[0] || 16;
-  const shuffled = [...players].sort(()=>Math.random()-0.5).slice(0,sz);
-  // Pad with BYEs
-  while (shuffled.length < sz) shuffled.push({id:'BYE',name:'Bye'});
-
-  // Store in window to avoid JSON serialisation inside an HTML attribute (causes SyntaxError)
-  window._pendingSeeds = shuffled.map(p=>p.id);
-
-  openModal('Seed bracket',
-    `<div class="alert alert-info">
-      ${players.length} players → ${sz}-player bracket (${sz-players.length>0?sz-players.length+' byes':'no byes needed'}).
-      Players are randomly seeded. You can reseed multiple times before locking.
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px">
-      ${shuffled.map((p,i)=>`<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--bg-raised);border-radius:var(--r);font-size:13px">
-        <span style="color:var(--ink-3);font-family:monospace;font-size:11px;min-width:20px">${i+1}</span>
-        <span style="font-weight:${p.id==='BYE'?400:500};color:${p.id==='BYE'?'var(--ink-3)':'var(--ink)'}">${esc(p.name)}</span>
-      </div>`).join('')}
-    </div>`,
-    `<button class="btn btn-ghost" onclick="openSeedBracket()">🎲 Reseed</button>
-     <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="commitSeedBracket(window._pendingSeeds)">Lock &amp; generate matches</button>`
-  );
-}
-
 async function commitSeedBracket(playerIds) {
   const ct = APP.config.competitionType;
+  const isDouble = ct === 'double_elim';
   const n = playerIds.length;
+  const wbRounds = Math.log2(n);
   const newMatches = [];
 
-  // Generate single elim R1 matches
-  for (let i=0; i<n; i+=2) {
+  // ── WINNERS BRACKET ──────────────────────────────────────
+  for (let i = 0; i < n; i += 2) {
     const m = {
       id:genId(), round:1, matchIndex:i/2, slot:'W',
       entityA:playerIds[i], entityB:playerIds[i+1],
       scoreA:0, scoreB:0, status:'scheduled',
       winnerId:null, loserId:null, date:'', venue:''
     };
-    // Auto-advance byes
-    if (playerIds[i]==='BYE'||playerIds[i+1]==='BYE') {
+    if (playerIds[i]==='BYE' || playerIds[i+1]==='BYE') {
       m.status='completed';
-      m.winnerId = playerIds[i]==='BYE'?playerIds[i+1]:playerIds[i];
-      m.loserId  = playerIds[i]==='BYE'?playerIds[i]:playerIds[i+1];
+      m.winnerId = playerIds[i]==='BYE' ? playerIds[i+1] : playerIds[i];
+      m.loserId  = playerIds[i]==='BYE' ? playerIds[i]   : playerIds[i+1];
     }
     newMatches.push(m);
   }
-
-  // Generate subsequent rounds (winners bracket)
-  const rounds = Math.log2(n);
-  for (let r=2; r<=rounds; r++) {
-    const prevCount = n / Math.pow(2, r-1);
-    for (let i=0; i<prevCount/2; i++) {
-      newMatches.push({
-        id:genId(), round:r, matchIndex:i, slot:'W',
-        entityA:'TBD', entityB:'TBD',
-        scoreA:0, scoreB:0, status:'scheduled',
-        winnerId:null, loserId:null, date:'', venue:''
-      });
+  for (let r = 2; r <= wbRounds; r++) {
+    const count = n / Math.pow(2, r);
+    for (let i = 0; i < count; i++) {
+      newMatches.push({ id:genId(), round:r, matchIndex:i, slot:'W', entityA:'TBD', entityB:'TBD', scoreA:0, scoreB:0, status:'scheduled', winnerId:null, loserId:null, date:'', venue:'' });
     }
   }
 
-  // For double elim, generate losers bracket skeleton
-  if (ct==='double_elim') {
-    // LB R1: losers from WB R1
-    const wbR1Count = n/2;
-    for (let i=0; i<wbR1Count/2; i++) {
-      newMatches.push({
-        id:genId(), round:1, matchIndex:i, slot:'L',
-        entityA:'TBD', entityB:'TBD',
-        scoreA:0, scoreB:0, status:'scheduled',
-        winnerId:null, loserId:null, date:'', venue:''
-      });
-    }
-    // LB subsequent rounds
-    const lbRounds = (rounds-1)*2 - 1;
-    for (let r=2; r<=lbRounds; r++) {
-      const cnt = Math.max(1, wbR1Count / Math.pow(2, Math.ceil(r/2)));
-      for (let i=0; i<Math.ceil(cnt); i++) {
-        newMatches.push({
-          id:genId(), round:r, matchIndex:i, slot:'L',
-          entityA:'TBD', entityB:'TBD',
-          scoreA:0, scoreB:0, status:'scheduled',
-          winnerId:null, loserId:null, date:'', venue:''
-        });
+  if (isDouble) {
+    // ── LOSERS BRACKET ──────────────────────────────────────
+    // LB has 2*(wbRounds-1) rounds.
+    // Odd  LB rounds: WB losers injected (one odd round per WB round)
+    // Even LB rounds: LB survivors play each other (halving)
+    // Match count in LB round r = n / 2^(ceil(r/2)+1)
+    //   LB R1: n/4   (e.g. 8p → 2 matches: 4 WB-R1 losers)
+    //   LB R2: n/8   (e.g. 8p → 1 match:   2 LB-R1 survivors + 2 WB-R2 losers)
+    //   LB R3: n/8   (same: injected WB-R2 losers play LB-R1 winners)
+    //   LB R4: n/16  (LB-R3 survivors)
+    //   Grand Final: 1 match
+    const lbTotalRounds = 2 * (wbRounds - 1);
+    for (let r = 1; r <= lbTotalRounds; r++) {
+      const matchCount = Math.max(1, n / Math.pow(2, Math.ceil(r/2) + 1));
+      for (let i = 0; i < matchCount; i++) {
+        newMatches.push({ id:genId(), round:r, matchIndex:i, slot:'L', entityA:'TBD', entityB:'TBD', scoreA:0, scoreB:0, status:'scheduled', winnerId:null, loserId:null, date:'', venue:'' });
       }
     }
-    // Grand Final
-    newMatches.push({
-      id:genId(), round:1, matchIndex:0, slot:'GF',
-      entityA:'TBD', entityB:'TBD',
-      scoreA:0, scoreB:0, status:'scheduled',
-      winnerId:null, loserId:null, date:'', venue:''
-    });
+    // Grand Final: WB winner (entityA) vs LB winner (entityB)
+    newMatches.push({ id:genId(), round:1, matchIndex:0, slot:'GF', entityA:'TBD', entityB:'TBD', scoreA:0, scoreB:0, status:'scheduled', winnerId:null, loserId:null, date:'', venue:'' });
   }
 
   APP.bracketMatches = newMatches;
-  // Auto-advance byes
-  newMatches.filter(m=>m.status==='completed').forEach(m=>advanceBracket(m));
-  await Promise.all(newMatches.map(m=>persistInLeague('bracketMatches',m.id,m)));
+  newMatches.filter(m => m.status==='completed').forEach(m => advanceBracket(m));
+  await Promise.all(newMatches.map(m => persistInLeague('bracketMatches', m.id, m)));
   saveActiveToLocal();
-  closeModal(); toast('Bracket seeded ✓'); render();
+  closeModal();
+  toast('Bracket seeded \u2713');
+  render();
+  requestAnimationFrame(()=>{ try { drawBracketLines(); } catch(e){ console.warn('drawBracketLines:',e.message); } });
 }
 
+// ── ADVANCE BRACKET ─────────────────────────────────────────
+// Routes winner to next match, loser to LB (double elim only).
+//
+// LB feeding schedule (WB round r loser → LB odd round):
+//   WB R1 → LB R1   (4 losers fill 2 LB-R1 matches, both slots)
+//   WB R2 → LB R3   (2 losers fill LB-R3 entityB slots)
+//   WB R3 → LB R5   (1 loser fills LB-R5 entityB slot)
+//   General: WB round r losers → LB round (2r-1)
+//
+function advanceBracket(completedMatch) {
+  if (!completedMatch.winnerId) return;
+  const { round, matchIndex, slot, winnerId, loserId } = completedMatch;
+  const isDouble = APP.config.competitionType === 'double_elim';
+
+  // ── Winners bracket progression ──
+  if (slot === 'W') {
+    const nextRound    = round + 1;
+    const nextMatchIdx = Math.floor(matchIndex / 2);
+    const isTop        = matchIndex % 2 === 0;
+    const nextWB = APP.bracketMatches.find(m => m.slot==='W' && m.round===nextRound && m.matchIndex===nextMatchIdx);
+    if (nextWB) {
+      if (isTop) { if (nextWB.entityA==='TBD') nextWB.entityA = winnerId; }
+      else       { if (nextWB.entityB==='TBD') nextWB.entityB = winnerId; }
+      if (nextWB.entityA!=='TBD' && nextWB.entityB!=='TBD') nextWB.status = 'scheduled';
+    } else if (isDouble) {
+      // WB final winner → GF entityA (the side with bracket advantage)
+      const gf = APP.bracketMatches.find(m => m.slot==='GF');
+      if (gf && gf.entityA==='TBD') {
+        gf.entityA = winnerId;
+        if (gf.entityA!=='TBD' && gf.entityB!=='TBD') gf.status='scheduled';
+      }
+    }
+
+    // ── Loser routing → correct LB round ──
+    if (isDouble && loserId) {
+      const targetLBRound = 2 * round - 1; // WB Rr → LB odd round (2r-1)
+      const lbRound = APP.bracketMatches.filter(m => m.slot==='L' && m.round===targetLBRound)
+                        .sort((a,b) => a.matchIndex - b.matchIndex);
+
+      if (round === 1) {
+        // WB R1: 4 losers fill LB R1 in pairs (matchIndex 0,1 → LB match 0; 2,3 → LB match 1)
+        const lbIdx = Math.floor(matchIndex / 2);
+        const lbM   = lbRound.find(m => m.matchIndex === lbIdx);
+        if (lbM) {
+          if (lbM.entityA==='TBD')      lbM.entityA = loserId;
+          else if (lbM.entityB==='TBD') lbM.entityB = loserId;
+          if (lbM.entityA!=='TBD' && lbM.entityB!=='TBD') lbM.status='scheduled';
+        }
+      } else {
+        // WB R2+: loser fills entityB slot of the corresponding LB odd round match
+        const lbM = lbRound.find(m => m.matchIndex===matchIndex) || lbRound.find(m => m.entityB==='TBD');
+        if (lbM) {
+          if (lbM.entityB==='TBD')      lbM.entityB = loserId;
+          else if (lbM.entityA==='TBD') lbM.entityA = loserId;
+          if (lbM.entityA!=='TBD' && lbM.entityB!=='TBD') lbM.status='scheduled';
+        }
+      }
+    }
+  }
+
+  // ── Losers bracket progression ──
+  if (slot === 'L') {
+    const nextRound    = round + 1;
+    const nextMatchIdx = Math.floor(matchIndex / 2);
+    const isTop        = matchIndex % 2 === 0;
+    const nextLB = APP.bracketMatches.find(m => m.slot==='L' && m.round===nextRound && m.matchIndex===nextMatchIdx);
+    if (nextLB) {
+      // LB survivor fills entityA of next round (WB loser fills entityB)
+      if (isTop) { if (nextLB.entityA==='TBD') nextLB.entityA = winnerId; }
+      else       { if (nextLB.entityB==='TBD') nextLB.entityB = winnerId; }
+      if (nextLB.entityA!=='TBD' && nextLB.entityB!=='TBD') nextLB.status='scheduled';
+    } else {
+      // LB final winner → GF entityB
+      const gf = APP.bracketMatches.find(m => m.slot==='GF');
+      if (gf && gf.entityB==='TBD') {
+        gf.entityB = winnerId;
+        if (gf.entityA!=='TBD' && gf.entityB!=='TBD') gf.status='scheduled';
+      }
+    }
+  }
+  // GF winner = champion, nothing to advance
+}
 // ── ADD BRACKET PLAYER ─────────────────────────────────────
 function openAddBracketPlayer() {
   openModal('Add player to bracket',
