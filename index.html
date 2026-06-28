@@ -1952,9 +1952,17 @@ function initAuth() {
     }
     APP.auth.loading = false;
     hideAuthLoading();
-    if (user) hideAuthScreen();   // ← always hide auth screen when signed in
+    if (user) hideAuthScreen();
     updateAuthChrome();
+
+    // ── Load leagues from Firestore on every page load ──────
+    // This is the critical wire: without this, competitions only
+    // load from localStorage (which is empty after a hard refresh
+    // if Firestore is the source of truth).
+    await loadLeagues();
+
     render();
+
     // If inside a league, re-evaluate tab visibility after auth resolves
     if (APP.view === 'league' && APP.activeLeagueId) {
       const ct = APP.config.competitionType||'league';
@@ -2481,21 +2489,26 @@ async function loadLeagues() {
   // Load from localStorage immediately for fast initial render
   try {
     const ls = JSON.parse(localStorage.getItem(LS_LEAGUES)||'null');
-    if (ls) { APP.leagues = ls; normaliseLeagues(); }
+    if (ls && ls.length) { APP.leagues = ls; normaliseLeagues(); }
   } catch(e) {}
 
   if (!db) { if (!APP.auth.loading) render(); return; }
   try {
-    // Use server fetch to bypass cache — ensures fresh data after create/delete
+    // Server fetch — bypasses Firestore offline cache for fresh data
     const snap = await db.collection(LEAGUES_COL)
       .orderBy('createdAt','desc')
       .get({ source: 'server' });
-    // Always update — even if empty (user may have no competitions)
-    APP.leagues = snap.docs.map(d => ({id:d.id,...d.data()}));
-    saveLeaguesToLocal(); // sync localStorage with server state
+
+    if (snap.size > 0) {
+      // Firestore has leagues — use as source of truth
+      APP.leagues = snap.docs.map(d => ({id:d.id,...d.data()}));
+      saveLeaguesToLocal();
+    }
+    // If snap.size === 0, keep whatever localStorage had (user may be offline
+    // or Firestore write genuinely hasn't happened yet)
   } catch(e) {
     console.warn('loadLeagues: server fetch failed, using cache:', e.message);
-    // Fall back to cache already loaded from localStorage above
+    // Already loaded from localStorage above — nothing more to do
   }
   normaliseLeagues();
   if (!APP.auth.loading) render();
