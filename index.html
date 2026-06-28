@@ -4264,12 +4264,11 @@ function downloadTemplate(format) {
   const isTeam = APP.config.format === 'team';
 
   if (format === 'csv') {
-    // CSV template
     const headers = isTeam
-      ? 'Team Name,Venue,Player 1 Name,Player 1 Contact,Player 2 Name,Player 2 Contact,Player 3 Name,Player 3 Contact'
+      ? 'Team Name,Venue,Player Name,Contact (email or phone),Handicap'
       : 'Name,Contact (email or phone),Handicap';
     const example = isTeam
-      ? 'Cue Masters,Table 1,Ronnie O\'Sullivan,ronnie@max147.com,Judd Trump,judd@max147.com,,,\nBreak Artists,Table 2,Mark Selby,mark@max147.com,Neil Robertson,neil@max147.com,,,,'
+      ? "Cue Masters,Table 1,Ronnie O'Sullivan,ronnie@max147.com,0\nCue Masters,Table 1,Judd Trump,judd@max147.com,0\nBreak Artists,Table 2,Mark Selby,mark@max147.com,2\nBreak Artists,Table 2,Neil Robertson,neil@max147.com,0"
       : "Ronnie O'Sullivan,ronnie@max147.com,0\nJudd Trump,judd@max147.com,0\nMark Selby,mark@max147.com,2";
     const csv = headers + '\n' + example;
     const blob = new Blob([csv], { type: 'text/csv' });
@@ -4279,19 +4278,40 @@ function downloadTemplate(format) {
     a.click(); URL.revokeObjectURL(a.href);
     toast('CSV template downloaded ✓');
   } else {
-    // Excel template using SheetJS
     if (typeof XLSX === 'undefined') { toast('SheetJS not loaded — use CSV instead'); return; }
     const wb = XLSX.utils.book_new();
 
     if (isTeam) {
+      // One row per player — team name repeated for each player in that team
+      const header = ['Team Name','Venue','Player Name','Contact (email or phone)','Handicap'];
       const data = [
-        ['Team Name','Venue','Player 1 Name','Player 1 Contact','Player 2 Name','Player 2 Contact','Player 3 Name','Player 3 Contact'],
-        ['Cue Masters','Table 1','Ronnie O\'Sullivan','ronnie@max147.com','Judd Trump','judd@max147.com','',''],
-        ['Break Artists','Table 2','Mark Selby','mark@max147.com','Neil Robertson','neil@max147.com','',''],
+        header,
+        ['Cue Masters','Table 1',"Ronnie O'Sullivan",'ronnie@max147.com',0],
+        ['Cue Masters','Table 1','Judd Trump','judd@max147.com',0],
+        ['Break Artists','Table 2','Mark Selby','mark@max147.com',2],
+        ['Break Artists','Table 2','Neil Robertson','neil@max147.com',0],
       ];
       const ws = XLSX.utils.aoa_to_sheet(data);
-      ws['!cols'] = [14,12,20,24,20,24,20,24].map(w=>({wch:w}));
-      XLSX.utils.book_append_sheet(wb, ws, 'Teams');
+      ws['!cols'] = [{wch:18},{wch:14},{wch:22},{wch:26},{wch:10}];
+
+      // Add instructions sheet
+      const info = [
+        ['Team League Import — Instructions'],
+        [''],
+        ['One row per PLAYER. Repeat the team name and venue for each player in that team.'],
+        ['The system will automatically group players into teams by team name.'],
+        [''],
+        ['Columns:'],
+        ['  Team Name  — The team this player belongs to (must match exactly for same team)'],
+        ['  Venue      — Where the team plays (same for all players in a team)'],
+        ['  Player Name — The player\'s display name'],
+        ['  Contact    — Email address or phone number (optional)'],
+        ['  Handicap   — Frame handicap number, 0 if none (optional)'],
+      ];
+      const infoWs = XLSX.utils.aoa_to_sheet(info);
+      infoWs['!cols'] = [{wch:70}];
+      XLSX.utils.book_append_sheet(wb, ws, 'Teams & Players');
+      XLSX.utils.book_append_sheet(wb, infoWs, 'Instructions');
     } else {
       const data = [
         ['Name','Contact (email or phone)','Handicap'],
@@ -4302,32 +4322,23 @@ function downloadTemplate(format) {
       ];
       const ws = XLSX.utils.aoa_to_sheet(data);
       ws['!cols'] = [{wch:24},{wch:28},{wch:10}];
-      // Style header row
       ['A1','B1','C1'].forEach(ref => {
         if (!ws[ref]) return;
-        ws[ref].s = { font:{ bold:true }, fill:{ fgColor:{ rgb:'0F2218' } } };
+        ws[ref].s = { font:{ bold:true } };
       });
+      const info = [
+        ['Individual Player Import — Instructions'],
+        [''],
+        ['One row per player.'],
+        ['Columns: Name | Contact (email/phone) | Handicap (number, 0 if none)'],
+      ];
+      const infoWs = XLSX.utils.aoa_to_sheet(info);
+      infoWs['!cols'] = [{wch:60}];
       XLSX.utils.book_append_sheet(wb, ws, 'Players');
+      XLSX.utils.book_append_sheet(wb, infoWs, 'Instructions');
     }
 
-    // Add instructions sheet
-    const infoData = [
-      ['MAX147 League Manager — Participant Import Template'],
-      [''],
-      ['Instructions:'],
-      ['1. Fill in the Players (or Teams) sheet — do not change column headers'],
-      ['2. Name is required. Contact and Handicap are optional.'],
-      ['3. Handicap should be a number (0 = no handicap)'],
-      ['4. Save the file, then upload it in the Participants tab'],
-      ['5. Existing players will NOT be removed — the import adds to the list'],
-      [''],
-      ['Supported formats: .xlsx  .xls  .csv'],
-    ];
-    const infoWs = XLSX.utils.aoa_to_sheet(infoData);
-    infoWs['!cols'] = [{wch:60}];
-    XLSX.utils.book_append_sheet(wb, infoWs, 'Instructions');
-
-    XLSX.writeFile(wb, `max147_${isTeam?'teams':'players'}_template.xlsx`);
+    XLSX.writeFile(wb, `max147_${isTeam?'teams_players':'players'}_template.xlsx`);
     toast('Excel template downloaded ✓');
   }
 }
@@ -4349,7 +4360,12 @@ function openImportParticipants() {
       <div class="import-zone-icon">📥</div>
       <div class="import-zone-msg">
         <strong>Click to browse</strong> or drag & drop a file here<br>
-        <span style="font-size:11px;color:var(--ink-3)">Supports .csv, .xlsx, .xls — max 5MB</span>
+        <span style="font-size:11px;color:var(--ink-3)">
+          ${APP.config.format==='team'
+            ? 'Columns: Team Name | Venue | Player Name | Contact | Handicap'
+            : 'Columns: Name | Contact | Handicap'}
+           — .csv or .xlsx, max 5MB
+        </span>
       </div>
       <input type="file" id="import-file-input" accept=".csv,.xlsx,.xls"
         onchange="handleImportFile(this.files[0])">
@@ -4455,67 +4471,58 @@ function parseExcelImport(arrayBuffer) {
 // ── PROCESS PARSED ROWS ────────────────────────────────────
 function processImportRows(rows, headerLine) {
   const isTeam = APP.config.format === 'team';
+
+  if (isTeam) {
+    _processTeamImportRows(rows);
+  } else {
+    _processPlayerImportRows(rows);
+  }
+}
+
+// Individual player import
+function _processPlayerImportRows(rows) {
   const existingNames = new Set(APP.players.map(p => p.name.toLowerCase().trim()));
   const processed = [];
 
-  const isTeamImport = APP.config.format === 'team';
-  rows.forEach((cols, i) => {
+  rows.forEach(cols => {
     if (!cols.length) return;
-
-    // Auto-detect if first column is a row number (#)
+    // Skip numeric first column (#)
     let offset = 0;
     const first = String(cols[0] || '').trim();
-    if (first && !isNaN(first) && cols.length > 1 && String(cols[1]||'').trim()) {
-      offset = 1;
-    }
+    if (first && !isNaN(first) && cols.length > 1 && String(cols[1]||'').trim()) offset = 1;
 
-    const name    = String(cols[offset]     || '').trim();
-    const contact = String(cols[offset + 1] || '').trim();
-    const handicap= parseInt(cols[offset + 2]) || 0;
-
+    const name     = String(cols[offset]     || '').trim();
+    const contact  = String(cols[offset + 1] || '').trim();
+    const handicap = Math.round(+String(cols[offset + 2] || '0').trim() || 0);
     if (!name) return;
 
     const isDuplicate = existingNames.has(name.toLowerCase());
     const isValid     = name.length >= 1 && name.length <= 80;
-
     processed.push({
       name, contact, handicap,
       status: isDuplicate ? 'duplicate' : !isValid ? 'error' : 'ok',
-      error:  !isValid ? 'Name too long (max 80 chars)' : isDuplicate ? 'Already in list' : null,
+      error:  !isValid ? 'Name too long' : isDuplicate ? 'Already in list' : null,
     });
   });
 
   if (!processed.length) {
     document.getElementById('import-preview-area').innerHTML =
-      `<div class="alert alert-warn" style="margin-top:12px">No valid rows found. Check your file format matches the template.</div>`;
+      `<div class="alert alert-warn" style="margin-top:12px">No valid rows found. Check your file matches the template.</div>`;
     return;
   }
 
-  window._importRows = processed;
+  window._importRows  = processed;
+  window._importTeams = null;
 
-  const okCount   = processed.filter(r=>r.status==='ok').length;
-  const dupCount  = processed.filter(r=>r.status==='duplicate').length;
-  const errCount  = processed.filter(r=>r.status==='error').length;
-  const showMax   = 8;
-  const shown     = processed.slice(0, showMax);
-
-  const rows_html = shown.map(r => `
-    <div class="import-preview-row">
-      <div style="font-weight:${r.status==='ok'?600:400}">${esc(r.name)}</div>
-      <div style="color:var(--ink-3)">${esc(r.contact)||'—'}</div>
-      <div class="import-row-${r.status==='ok'?'ok':r.status==='duplicate'?'warn':'err'}">
-        ${r.status==='ok'?'✓ Ready':r.status==='duplicate'?'Skip (exists)':'✗ '+r.error}
-      </div>
-    </div>`).join('');
-
-  const more = processed.length > showMax
-    ? `<div style="padding:8px 14px;font-size:11px;color:var(--ink-3)">…and ${processed.length-showMax} more rows</div>`
-    : '';
+  const okCount  = processed.filter(r=>r.status==='ok').length;
+  const dupCount = processed.filter(r=>r.status==='duplicate').length;
+  const errCount = processed.filter(r=>r.status==='error').length;
+  const shown    = processed.slice(0, 8);
 
   document.getElementById('import-preview-area').innerHTML = `
     <div class="import-preview">
       <div class="import-preview-hd">
-        <span>Preview — ${processed.length} rows</span>
+        <span>Preview — ${processed.length} players</span>
         <span style="font-size:11px">
           <span style="color:var(--green)">${okCount} ready</span>
           ${dupCount?`&nbsp;·&nbsp;<span style="color:var(--amber)">${dupCount} skip</span>`:''}
@@ -4525,43 +4532,188 @@ function processImportRows(rows, headerLine) {
       <div class="import-preview-row" style="background:var(--bg-raised);font-weight:600;font-size:11px;color:var(--ink-2)">
         <div>Name</div><div>Contact</div><div>Status</div>
       </div>
-      ${rows_html}${more}
+      ${shown.map(r=>`<div class="import-preview-row">
+        <div style="font-weight:${r.status==='ok'?600:400}">${esc(r.name)}</div>
+        <div style="color:var(--ink-3)">${esc(r.contact)||'—'}</div>
+        <div class="import-row-${r.status==='ok'?'ok':r.status==='duplicate'?'warn':'err'}">
+          ${r.status==='ok'?'✓ Ready':r.status==='duplicate'?'Skip (exists)':'✗ '+r.error}
+        </div></div>`).join('')}
+      ${processed.length>8?`<div style="padding:8px 14px;font-size:11px;color:var(--ink-3)">…and ${processed.length-8} more</div>`:''}
     </div>`;
 
-  // Show confirm button only if there's something to import
+  const btn = document.getElementById('import-confirm-btn');
+  if (btn) { btn.style.display = okCount>0?'':'none'; btn.textContent=`Import ${okCount} player${okCount!==1?'s':''}`; }
+}
+
+// Team import — one row per player, grouped by team name
+function _processTeamImportRows(rows) {
+  const existingTeamNames = new Set(APP.teams.map(t => t.name.toLowerCase().trim()));
+  const existingPlayerNames = new Set(APP.players.map(p => p.name.toLowerCase().trim()));
+
+  // Parse rows: Team Name | Venue | Player Name | Contact | Handicap
+  // Skip numeric first column if present
+  const parsed = [];
+  rows.forEach(cols => {
+    if (!cols.length) return;
+    let offset = 0;
+    const first = String(cols[0]||'').trim();
+    if (first && !isNaN(first) && cols.length > 1) offset = 1;
+
+    const teamName   = String(cols[offset]     || '').trim();
+    const venue      = String(cols[offset + 1] || '').trim();
+    const playerName = String(cols[offset + 2] || '').trim();
+    const contact    = String(cols[offset + 3] || '').trim();
+    const handicap   = Math.round(+String(cols[offset + 4] || '0').trim() || 0);
+
+    if (!teamName || !playerName) return;
+    parsed.push({ teamName, venue, playerName, contact, handicap });
+  });
+
+  if (!parsed.length) {
+    document.getElementById('import-preview-area').innerHTML =
+      `<div class="alert alert-warn" style="margin-top:12px">No valid rows found. Ensure columns are: Team Name | Venue | Player Name | Contact | Handicap</div>`;
+    return;
+  }
+
+  // Group by team name
+  const teamsMap = new Map();
+  parsed.forEach(row => {
+    const key = row.teamName.toLowerCase();
+    if (!teamsMap.has(key)) {
+      teamsMap.set(key, {
+        teamName: row.teamName,
+        venue:    row.venue,
+        players:  [],
+        isNew:    !existingTeamNames.has(key),
+      });
+    }
+    const team = teamsMap.get(key);
+    const isDup = existingPlayerNames.has(row.playerName.toLowerCase());
+    team.players.push({
+      playerName: row.playerName,
+      contact:    row.contact,
+      handicap:   row.handicap,
+      isDuplicate: isDup,
+    });
+  });
+
+  window._importRows  = null;
+  window._importTeams = [...teamsMap.values()];
+
+  const newTeams   = window._importTeams.filter(t => t.isNew).length;
+  const addedTeams = window._importTeams.filter(t => !t.isNew).length;
+  const newPlayers = parsed.filter(r => !existingPlayerNames.has(r.playerName.toLowerCase())).length;
+  const dupPlayers = parsed.filter(r => existingPlayerNames.has(r.playerName.toLowerCase())).length;
+
+  // Preview — show grouped by team
+  const previewHtml = window._importTeams.map(t => `
+    <div style="margin-bottom:10px;padding:10px 12px;background:var(--bg-raised);border-radius:var(--r);border:1px solid var(--border)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div>
+          <span style="font-weight:700;font-size:13px;color:var(--ink)">${esc(t.teamName)}</span>
+          <span style="font-size:11px;color:var(--ink-3);margin-left:6px">📍 ${esc(t.venue)||'No venue'}</span>
+        </div>
+        <span class="import-row-${t.isNew?'ok':'warn'}" style="font-size:11px">
+          ${t.isNew?'✓ New team':'+ Adding players to existing'}
+        </span>
+      </div>
+      ${t.players.map(p=>`
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-top:1px solid rgba(201,168,76,.06);font-size:12px">
+          <span style="${p.isDuplicate?'color:var(--ink-3)':'color:var(--ink);font-weight:500'}">${esc(p.playerName)}${p.handicap?` <span style="color:var(--gold);font-size:10px">HC:${p.handicap}</span>`:''}</span>
+          <span class="import-row-${p.isDuplicate?'warn':'ok'}">${p.isDuplicate?'Skip (exists)':'✓ Ready'}</span>
+        </div>`).join('')}
+    </div>`).join('');
+
+  document.getElementById('import-preview-area').innerHTML = `
+    <div style="margin-bottom:12px;font-size:12px;color:var(--ink-2)">
+      <strong style="color:var(--green)">${newTeams} new team${newTeams!==1?'s':''}</strong>
+      ${addedTeams?` · <strong style="color:var(--amber)">${addedTeams} existing team${addedTeams!==1?'s':''} (players added)</strong>`:''}
+      · <strong style="color:var(--green)">${newPlayers} new player${newPlayers!==1?'s':''}</strong>
+      ${dupPlayers?` · <strong style="color:var(--amber)">${dupPlayers} skipped (already exist)</strong>`:''}
+    </div>
+    ${previewHtml}`;
+
   const btn = document.getElementById('import-confirm-btn');
   if (btn) {
-    btn.style.display = okCount > 0 ? '' : 'none';
-    btn.textContent = `Import ${okCount} player${okCount!==1?'s':''}`;
+    btn.style.display = newPlayers > 0 || window._importTeams.some(t=>t.isNew) ? '' : 'none';
+    btn.textContent = `Import ${window._importTeams.length} team${window._importTeams.length!==1?'s':''} (${newPlayers} player${newPlayers!==1?'s':''})`;
   }
 }
 
 // ── CONFIRM IMPORT ─────────────────────────────────────────
 async function confirmImport() {
+  const isTeam = APP.config.format === 'team';
+
+  if (isTeam) {
+    await _confirmTeamImport();
+  } else {
+    await _confirmPlayerImport();
+  }
+}
+
+async function _confirmPlayerImport() {
   const rows = window._importRows;
   if (!rows) return;
-
   const toAdd = rows.filter(r => r.status === 'ok');
   if (!toAdd.length) { toast('Nothing to import'); return; }
 
-  let added = 0;
   for (const row of toAdd) {
-    const p = {
-      id:genId(),
-      name:row.name,
-      contact:row.contact || '',
-      handicap: Math.round(+row.handicap || 0),
-      uid: null
-    };
+    const p = { id:genId(), name:row.name, contact:row.contact||'', handicap:Math.round(+row.handicap||0), uid:null };
     APP.players.push(p);
     await persistInLeague('players', p.id, p);
-    added++;
   }
 
   saveActiveToLocal();
   closeModal();
-  toast(`✓ ${added} player${added!==1?'s':''} imported`);
+  toast(`✓ ${toAdd.length} player${toAdd.length!==1?'s':''} imported`);
   window._importRows = null;
+  render();
+}
+
+async function _confirmTeamImport() {
+  const teams = window._importTeams;
+  if (!teams || !teams.length) { toast('Nothing to import'); return; }
+
+  const existingPlayerNames = new Set(APP.players.map(p => p.name.toLowerCase().trim()));
+  let totalPlayers = 0;
+  let totalTeams = 0;
+
+  for (const teamData of teams) {
+    // Find or create team
+    let team = APP.teams.find(t => t.name.toLowerCase() === teamData.teamName.toLowerCase());
+    if (!team) {
+      team = { id:genId(), name:teamData.teamName, venue:teamData.venue||'', players:[] };
+      APP.teams.push(team);
+      await persistInLeague('teams', team.id, team);
+      totalTeams++;
+    }
+
+    // Add players to team
+    for (const pData of teamData.players) {
+      if (existingPlayerNames.has(pData.playerName.toLowerCase())) continue; // skip duplicates
+
+      const p = {
+        id:       genId(),
+        name:     pData.playerName,
+        contact:  pData.contact || '',
+        handicap: Math.round(+pData.handicap || 0),
+        uid:      null,
+      };
+      APP.players.push(p);
+      team.players.push(p.id);
+      existingPlayerNames.add(pData.playerName.toLowerCase());
+      await persistInLeague('players', p.id, p);
+      totalPlayers++;
+    }
+
+    // Update team with new player list
+    await persistInLeague('teams', team.id, team);
+  }
+
+  saveActiveToLocal();
+  closeModal();
+  toast(`✓ ${totalTeams} team${totalTeams!==1?'s':''} · ${totalPlayers} player${totalPlayers!==1?'s':''} imported`);
+  window._importTeams = null;
   render();
 }
 
