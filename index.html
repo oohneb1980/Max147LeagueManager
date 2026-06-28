@@ -2339,12 +2339,24 @@ async function openAdminPanel() {
 // ── MANAGE MEMBERSHIPS MODAL ───────────────────────────────
 // Add current user as owner when creating a competition
 async function claimCompetitionOwnership(leagueId) {
-  if (!APP.auth.uid || !db) return;
-  const memberRef = db.collection(LEAGUES_COL).doc(leagueId)
-    .collection('members').doc(APP.auth.uid);
-  const data = { uid: APP.auth.uid, role: 'owner', displayName: APP.auth.displayName, email: APP.auth.email };
-  await memberRef.set(data);
+  if (!APP.auth.uid) return;
+  // Set in memory FIRST — canEditCompetition() works immediately
   APP.auth.memberships[leagueId] = { role: 'owner' };
+  if (!db) return;
+  try {
+    const data = {
+      uid: APP.auth.uid,
+      role: 'owner',
+      displayName: APP.auth.displayName || '',
+      email: APP.auth.email || ''
+    };
+    await db.collection(LEAGUES_COL).doc(leagueId)
+      .collection('members').doc(APP.auth.uid).set(data);
+    console.log('claimCompetitionOwnership: OK', leagueId);
+  } catch(e) {
+    // Keep in-memory membership even if Firestore write fails
+    console.error('claimCompetitionOwnership Firestore error:', e.code, e.message);
+  }
 }
 
 // Invite a player to a competition (sets their role to 'player' linked to a playerId)
@@ -2474,9 +2486,17 @@ async function loadLeagues() {
 
   if (!db) { if (!APP.auth.loading) render(); return; }
   try {
-    const snap = await db.collection(LEAGUES_COL).orderBy('createdAt','desc').get();
-    if (snap.size) APP.leagues = snap.docs.map(d => ({id:d.id,...d.data()}));
-  } catch(e) {}
+    // Use server fetch to bypass cache — ensures fresh data after create/delete
+    const snap = await db.collection(LEAGUES_COL)
+      .orderBy('createdAt','desc')
+      .get({ source: 'server' });
+    // Always update — even if empty (user may have no competitions)
+    APP.leagues = snap.docs.map(d => ({id:d.id,...d.data()}));
+    saveLeaguesToLocal(); // sync localStorage with server state
+  } catch(e) {
+    console.warn('loadLeagues: server fetch failed, using cache:', e.message);
+    // Fall back to cache already loaded from localStorage above
+  }
   normaliseLeagues();
   if (!APP.auth.loading) render();
 }
@@ -2514,17 +2534,19 @@ async function loadLeagueData(id) {
   } catch(e) { console.warn('Firestore league data load error',e); }
 }
 
-// Persist a league meta doc
+// Persist a league meta doc to localStorage + Firestore
 async function persistLeague(league) {
+  // 1. Always save to localStorage immediately
   saveLeaguesToLocal();
-  // Write to Firestore so the league survives page reload
-  if (db && league.id) {
-    try {
-      await db.collection(LEAGUES_COL).doc(league.id).set(league, { merge: true });
-    } catch(e) { console.warn('persistLeague Firestore error:', e.message); }
+  // 2. Write to Firestore so it survives page reload
+  if (!db || !league.id) return;
+  try {
+    await db.collection(LEAGUES_COL).doc(league.id).set(league, { merge: true });
+    console.log('persistLeague: saved to Firestore OK', league.id);
+  } catch(e) {
+    console.error('persistLeague: Firestore write FAILED:', e.code, e.message);
+    toast('Warning: competition saved locally but not synced to cloud: ' + e.message);
   }
-  if (!db||!fbConnected) return;
-  try { await db.collection(LEAGUES_COL).doc(league.id).set(league, {merge:true}); } catch(e){}
 }
 
 // Persist a document inside a league's subcollection
@@ -6080,14 +6102,24 @@ async function createLeague() {
     createdAt:new Date().toISOString().slice(0,10)
   };
   APP.leagues.unshift(lg);
-  await persistLeague(lg);
-  // Claim ownership — updates APP.auth.memberships immediately so
-  // canEditCompetition() works without a page reload
-  if (APP.auth.uid) await claimCompetitionOwnership(lg.id);
-  saveLeaguesToLocal();    // ensure localStorage is up to date
-  closeModal();
-  toast('Competition created ✓');
-  render();                // update hub immediately
+  saveLeaguesToLocal();            // save to localStorage immediately
+  closeModal();                    // close modal right away — don't wait for Firestore
+  toast('Creating competition…');
+  render();                        // show it in the hub immediately
+
+  // Claim ownership in memory immediately (before Firestore write)
+  if (APP.auth.uid) {
+    APP.auth.memberships[lg.id] = { role: 'owner' };
+  }
+
+  // Write to Firestore in background — failures shown as toast
+  try {
+    await persistLeague(lg);
+    if (APP.auth.uid) await claimCompetitionOwnership(lg.id);
+    toast('Competition created ✓');
+  } catch(e) {
+    toast('Saved locally — cloud sync pending: ' + (e.message||''));
+  }
 }
 
 function openEditLeague(id) {
