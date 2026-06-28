@@ -6316,20 +6316,38 @@ function openAddPlayer(teamId=null) {
 }
 
 function _loadUserPickerList() {
+  const list = document.getElementById('upick-list');
+
+  // Try cache first (_allUsers populated by User Management page if visited)
+  if (_allUsers && _allUsers.length) {
+    window._upickUsers = _allUsers;
+    _renderUserPickerList(_allUsers, '');
+  }
+
   if (!db) {
-    const el = document.getElementById('upick-list');
-    if (el) el.innerHTML = '<div style="color:var(--ink-3);font-size:12px;padding:8px 0">No member data available. Add players manually.</div>';
+    if (list && !_allUsers.length) {
+      list.innerHTML = '<div style="color:var(--ink-3);font-size:12px;padding:8px 0">Not connected — add players manually.</div>';
+    }
     return;
   }
+
   db.collection('users').orderBy('displayName').get({ source: 'server' })
     .then(snap => {
       window._upickUsers = snap.docs.map(d => ({id:d.id,...d.data()}));
       _renderUserPickerList(window._upickUsers, '');
     })
     .catch(e => {
-      console.warn('User picker load failed:', e.message);
-      const el = document.getElementById('upick-list');
-      if (el) el.innerHTML = '<div style="color:var(--ink-3);font-size:12px;padding:8px 0">Could not load members. Add players manually.</div>';
+      console.warn('User picker load failed:', e.code, e.message);
+      // If we have cache, silently use it — don't show error
+      if (window._upickUsers && window._upickUsers.length) {
+        _renderUserPickerList(window._upickUsers, '');
+      } else {
+        const el = document.getElementById('upick-list');
+        if (el) el.innerHTML = `<div style="color:var(--amber);font-size:12px;padding:8px 0">
+          ⚠ Could not load members (${e.code||e.message}).<br>
+          <span style="color:var(--ink-3)">Add players manually using the fields below, or check Firestore rules are deployed.</span>
+        </div>`;
+      }
     });
 }
 
