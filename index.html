@@ -6483,25 +6483,55 @@ async function commitSeedBracket(playerIds) {
 
   // ── Double elim: losers bracket + GF ─────────────────────
   if (isDouble) {
-    // LB size is based on real players (n), not padded bracket (p)
-    // Real R1 matches = n - p/2 (same as r1Matches without byes)
-    // Wikipedia structure:
-    //   LB R1 (minor): real R1 losers pair up → n/4 matches (or fewer)
-    //   LB R2 (major): LB R1 winners vs WB R2 (QF) losers
-    //   LB R3 (minor): LB R2 winners pair up
-    //   LB R4 (major): LB R3 winners vs WB R3 (SF) losers
-    //   ...
-    // Use p for LB sizing (same bracket width) since WB uses p slots
+    // LB sizing must account for BYEs — real player count drives LB size, not p.
+    // realR1 = number of real R1 matches (non-BYE)
+    const realR1   = n - halfP;           // e.g. 12 players → 4 real R1 matches
     const lbRounds = 2 * (totalRounds - 1);
+
+    // Build LB round by round with correct match counts:
+    //   LB R1 (minor): ceil(realR1/2) matches — real R1 losers pair up
+    //   LB R2 (major): ceil((LB-R1-winners + WB-R2-losers) / 2) matches
+    //   LB R3 (minor): ceil(LB-R2-winners / 2) matches
+    //   LB R4 (major): ceil((LB-R3-winners + WB-R3-losers) / 2) matches
+    //   ... each major round injects new WB losers; minor rounds halve survivors
+
+    let lbPlayers = realR1; // starts with real R1 losers
+    const lbMatchCounts = [];
+
     for (let r = 1; r <= lbRounds; r++) {
-      const refOdd     = r % 2 === 1 ? r : r - 1;
-      const matchCount = Math.max(1, p / Math.pow(2, Math.ceil(refOdd / 2) + 1));
-      for (let i = 0; i < matchCount; i++) {
+      const isMinor = r % 2 === 1; // odd = minor (LB survivors play each other)
+      const isFirst = r === 1;
+
+      let matches;
+      if (isFirst) {
+        // LB R1: real R1 losers pair up
+        matches = Math.max(1, Math.ceil(realR1 / 2));
+        lbPlayers = matches; // survivors after R1
+      } else if (isMinor) {
+        // Minor round: LB survivors play each other (no WB injection)
+        matches = Math.max(1, Math.ceil(lbPlayers / 2));
+        lbPlayers = matches;
+      } else {
+        // Major round: LB survivors + WB losers injected
+        // WB round that feeds this LB major round:
+        //   LB R2 ← WB R2 losers (p/4 matches worth)
+        //   LB R4 ← WB R3 losers (p/8 matches worth)
+        //   LB R6 ← WB R4 losers (p/16 matches worth)
+        const wbRoundIdx = r / 2 + 1; // WB round that feeds this LB major
+        const wbLosers   = p / Math.pow(2, wbRoundIdx); // matches in that WB round
+        const totalIn    = lbPlayers + wbLosers;
+        matches = Math.max(1, Math.ceil(totalIn / 2));
+        lbPlayers = matches;
+      }
+
+      lbMatchCounts.push(matches);
+      for (let i = 0; i < matches; i++) {
         newMatches.push({ id:genId(), round:r, matchIndex:i, slot:'L',
           entityA:'TBD', entityB:'TBD', scoreA:0, scoreB:0,
           status:'scheduled', winnerId:null, loserId:null, date:'', venue:'' });
       }
     }
+
     newMatches.push({ id:genId(), round:1, matchIndex:0, slot:'GF',
       entityA:'TBD', entityB:'TBD', scoreA:0, scoreB:0,
       status:'scheduled', winnerId:null, loserId:null, date:'', venue:'' });
