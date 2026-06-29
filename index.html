@@ -303,6 +303,16 @@ input::placeholder { color: var(--ink-3); }
 select option { background: var(--bg-mid); }
 input[type=number] { -moz-appearance: textfield; font-family: 'JetBrains Mono', monospace; }
 input[type=number]::-webkit-inner-spin-button { opacity: .4; }
+/* Date picker — force white text/icon so it's visible on dark background */
+input[type="date"] {
+  color: var(--ink);
+  color-scheme: dark;
+}
+input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(1) brightness(1.5);
+  cursor: pointer;
+  opacity: 0.8;
+}
 
 /* ── TOGGLE ─────────────────────────────────────────────── */
 .toggle-group { display: flex; background: var(--bg-mid); border: 1px solid var(--border); border-radius: var(--r); padding: 3px; gap: 2px; }
@@ -6473,6 +6483,15 @@ async function commitSeedBracket(playerIds) {
 
   // ── Double elim: losers bracket + GF ─────────────────────
   if (isDouble) {
+    // LB size is based on real players (n), not padded bracket (p)
+    // Real R1 matches = n - p/2 (same as r1Matches without byes)
+    // Wikipedia structure:
+    //   LB R1 (minor): real R1 losers pair up → n/4 matches (or fewer)
+    //   LB R2 (major): LB R1 winners vs WB R2 (QF) losers
+    //   LB R3 (minor): LB R2 winners pair up
+    //   LB R4 (major): LB R3 winners vs WB R3 (SF) losers
+    //   ...
+    // Use p for LB sizing (same bracket width) since WB uses p slots
     const lbRounds = 2 * (totalRounds - 1);
     for (let r = 1; r <= lbRounds; r++) {
       const refOdd     = r % 2 === 1 ? r : r - 1;
@@ -6551,27 +6570,35 @@ function advanceBracket(completedMatch) {
       }
     }
 
-    // ── Loser routing → correct LB round (Wikipedia) ──────
-    // WB R1 losers → LB R1  (both slots filled with WB losers)
-    // WB Rr (r>1)  → LB R(2*(r-1))  (entityB; entityA = LB survivor)
-    if (isDouble && loserId) {
+    // ── Loser routing → correct LB round ──────────────────
+    // Skip BYE losers — they're not real players
+    // Wikipedia formula: WB Rr loser → LB R(2r-1) for r>=1
+    //   WB R1 → LB R1, WB R2 → LB R3, WB R3 → LB R5...
+    // But with byes: WB R1 real losers still → LB R1
+    // BYE losers are ignored entirely
+    if (isDouble && loserId && loserId !== 'BYE') {
       const targetLBRound = round === 1 ? 1 : 2 * (round - 1);
       const lbRound = APP.bracketMatches
         .filter(m => m.slot === 'L' && m.round === targetLBRound)
         .sort((a, b) => a.matchIndex - b.matchIndex);
 
       if (round === 1) {
-        // matchIndex 0,1 → LB[0] ; matchIndex 2,3 → LB[1]
-        const lbIdx = Math.floor(matchIndex / 2);
-        const lbM   = lbRound.find(m => m.matchIndex === lbIdx);
+        // Pair R1 real losers into LB R1 matches
+        // Each pair of adjacent R1 matches feeds one LB R1 match
+        // But skip BYE matches — count only real R1 matches
+        const realR1 = APP.bracketMatches
+          .filter(m => m.slot==='W' && m.round===1 && m.entityA!=='BYE' && m.entityB!=='BYE')
+          .sort((a,b)=>a.matchIndex-b.matchIndex);
+        const realIdx = realR1.findIndex(m => m.id === completedMatch.id);
+        const lbIdx   = Math.floor(realIdx / 2);
+        const lbM     = lbRound.find(m => m.matchIndex === lbIdx);
         if (lbM) {
           if (lbM.entityA === 'TBD')      lbM.entityA = loserId;
           else if (lbM.entityB === 'TBD') lbM.entityB = loserId;
           if (lbM.entityA !== 'TBD' && lbM.entityB !== 'TBD') lbM.status = 'scheduled';
         }
       } else {
-        // WB R2+: one loser feeds entityB of the corresponding LB major round match.
-        // Use matchIndex to pair correctly when multiple LB matches exist in this round.
+        // WB R2+: one loser per LB major round match
         const lbM = lbRound.find(m => m.matchIndex === matchIndex && m.entityB === 'TBD')
                  || lbRound.find(m => m.entityB === 'TBD')
                  || lbRound[0];
