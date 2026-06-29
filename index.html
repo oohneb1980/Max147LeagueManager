@@ -6485,7 +6485,8 @@ async function commitSeedBracket(playerIds) {
   if (isDouble) {
     // LB sizing must account for BYEs — real player count drives LB size, not p.
     // realR1 = number of real R1 matches (non-BYE)
-    const realR1   = n - halfP;           // e.g. 12 players → 4 real R1 matches
+    const halfP   = p / 2;
+    const realR1  = n - halfP;           // e.g. 12 players → 4 real R1 matches
     const lbRounds = 2 * (totalRounds - 1);
 
     // Build LB round by round with correct match counts:
