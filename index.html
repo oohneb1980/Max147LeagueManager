@@ -2580,16 +2580,21 @@ async function loadLeagueData(id) {
   liveUnsubs.forEach(u=>u()); liveUnsubs=[];
   try {
     const base = db.collection(LEAGUES_COL).doc(id);
+    // Don't use orderBy('date') — requires Firestore index and fails for
+    // matches without a date field. Sort client-side instead.
     const [pSnap, tSnap, mSnap, bSnap] = await Promise.all([
       base.collection('players').get(),
       base.collection('teams').get(),
-      base.collection('matches').orderBy('date').get(),
-      base.collection('breaks').orderBy('score','desc').get()
+      base.collection('matches').get(),
+      base.collection('breaks').get()
     ]);
-    if (pSnap.size) APP.players = pSnap.docs.map(d=>({id:d.id,...d.data()}));
-    if (tSnap.size) APP.teams   = tSnap.docs.map(d=>({id:d.id,...d.data()}));
-    if (mSnap.size) APP.matches = mSnap.docs.map(d=>({id:d.id,...d.data()}));
-    if (bSnap.size) APP.breaks  = bSnap.docs.map(d=>({id:d.id,...d.data()}));
+    // Always overwrite — even empty snapshots mean "no data" (e.g. after reset)
+    APP.players = pSnap.docs.map(d=>({id:d.id,...d.data()}));
+    APP.teams   = tSnap.docs.map(d=>({id:d.id,...d.data()}));
+    APP.matches = mSnap.docs.map(d=>({id:d.id,...d.data()}))
+      .sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+    APP.breaks  = bSnap.docs.map(d=>({id:d.id,...d.data()}))
+      .sort((a,b)=>(b.score||0)-(a.score||0));
 
     const unsub = base.collection('matches')
       .where('status','in',['live','scheduled'])
@@ -2625,8 +2630,15 @@ async function persistLeague(league) {
 // Persist a document inside a league's subcollection
 async function persistInLeague(col, id, data) {
   saveActiveToLocal();
-  if (!db||!fbConnected||!APP.activeLeagueId) return;
-  try { await db.collection(LEAGUES_COL).doc(APP.activeLeagueId).collection(col).doc(id).set(data,{merge:true}); } catch(e){}
+  if (!db || !APP.activeLeagueId) return;
+  // Note: don't check fbConnected — we want to persist even when realtime
+  // listener is disconnected (offline Firestore will queue writes)
+  try {
+    await db.collection(LEAGUES_COL).doc(APP.activeLeagueId)
+      .collection(col).doc(id).set(data, {merge:true});
+  } catch(e) {
+    console.warn('persistInLeague error', col, id, e.code, e.message);
+  }
 }
 
 async function deleteInLeague(col, id) {
@@ -2841,14 +2853,20 @@ function computeStandings() {
   entities.forEach(e=>{map[e.id]={id:e.id,name:e.name,p:0,w:0,d:0,l:0,fw:0,fl:0,hb:0,pts:0};});
   APP.matches.filter(m=>m.status==='completed').forEach(m=>{
     const a=map[m.entityA],b=map[m.entityB];
-    if(!a||!b)return;
+    if(!a||!b){
+      // Entity not found — could be stale data or wrong format
+      console.warn('computeStandings: entity not found for match',m.id,'A:',m.entityA,'B:',m.entityB);
+      return;
+    }
     a.p++;b.p++;
-    a.fw+=m.scoreA;a.fl+=m.scoreB;b.fw+=m.scoreB;b.fl+=m.scoreA;
+    a.fw+=(m.scoreA||0); a.fl+=(m.scoreB||0);
+    b.fw+=(m.scoreB||0); b.fl+=(m.scoreA||0);
     if((m.highBreakA||0)>a.hb)a.hb=m.highBreakA;
     if((m.highBreakB||0)>b.hb)b.hb=m.highBreakB;
-    if(m.scoreA>m.scoreB){a.w++;b.l++;a.pts+=pointsWin;b.pts+=pointsLose;}
-    else if(m.scoreA<m.scoreB){b.w++;a.l++;b.pts+=pointsWin;a.pts+=pointsLose;}
-    else{a.d++;b.d++;a.pts+=pointsDraw;b.pts+=pointsDraw;}
+    const sa=m.scoreA||0, sb=m.scoreB||0;
+    if(sa>sb){a.w++;b.l++;a.pts+=(pointsWin||3);b.pts+=(pointsLose||0);}
+    else if(sa<sb){b.w++;a.l++;b.pts+=(pointsWin||3);a.pts+=(pointsLose||0);}
+    else{a.d++;b.d++;a.pts+=(pointsDraw||1);b.pts+=(pointsDraw||1);}
   });
   return Object.values(map);
 }
@@ -7253,13 +7271,25 @@ function openIndividualScoreEntry(m) {
       <div class="form-field"><label>Date</label><input id="es-date" type="date" value="${m.date||''}"></div>
       <div class="form-field"><label>Venue</label><input id="es-venue" value="${esc(m.venue||'')}" placeholder="Venue"></div>
     </div>
-    <div class="form-row"><div class="form-field"><label>Status</label>
-      <select id="es-status">
-        <option value="scheduled" ${m.status==='scheduled'?'selected':''}>Scheduled</option>
-        <option value="live"      ${m.status==='live'?'selected':''}>Live</option>
-        <option value="completed" ${m.status==='completed'?'selected':''}>Completed</option>
-      </select>
-    </div></div>
+    <div class="form-row c2">
+      <div class="form-field"><label>Status</label>
+        <select id="es-status">
+          <option value="scheduled" ${m.status==='scheduled'?'selected':''}>Scheduled</option>
+          <option value="live"      ${m.status==='live'?'selected':''}>Live</option>
+          <option value="completed" ${m.status==='completed'?'selected':''}>Completed</option>
+        </select>
+      </div>
+    </div>
+    <div style="margin:10px 0 4px;padding:10px 12px;background:var(--bg-raised);border-radius:var(--r);font-size:12px;color:var(--ink-2)">
+      <strong>Tie-breaker / additional frames:</strong> if the score is tied after all player matchups,
+      enter extra frame wins below (e.g. a golden frame).
+    </div>
+    <div class="form-row c2">
+      <div class="form-field"><label>Extra frames — ${esc(aName)}</label>
+        <input id="es-sa-extra" type="number" min="0" value="0" placeholder="0"></div>
+      <div class="form-field"><label>Extra frames — ${esc(bName)}</label>
+        <input id="es-sb-extra" type="number" min="0" value="0" placeholder="0"></div>
+    </div>
     <div style="margin:14px 0 6px;font-size:11px;font-weight:600;color:var(--ink-2);text-transform:uppercase;letter-spacing:.05em">Frame log (optional)</div>
     <div style="background:var(--bg-mid);border-radius:var(--r);overflow:hidden">
       <div style="display:grid;grid-template-columns:36px 1fr 90px 90px;gap:6px;padding:6px 10px;background:var(--bg);font-size:10px;font-weight:600;color:var(--ink-3);text-transform:uppercase">
@@ -7442,16 +7472,21 @@ function updateTeamScoreSummary() {
   const winsA = frames.filter(f=>f.winnerA===true).length;
   const winsB = frames.filter(f=>f.winnerA===false).length;
   const pending = frames.filter(f=>f.winnerA===null).length;
+  const extraA = parseInt(document.getElementById('es-sa-extra')?.value||'0')||0;
+  const extraB = parseInt(document.getElementById('es-sb-extra')?.value||'0')||0;
+  const totalA = winsA + extraA;
+  const totalB = winsB + extraB;
   const el = document.getElementById('team-score-summary');
   if (!el) return;
-  const winner = winsA > winsB ? (window._teamAName||'A') : winsA < winsB ? (window._teamBName||'B') : null;
+  const winner = totalA > totalB ? (window._teamAName||'A') : totalA < totalB ? (window._teamBName||'B') : null;
+  const isDraw = totalA === totalB && !pending && frames.length > 0;
   el.innerHTML = `
-    <span style="color:var(--gold)">${winsA}</span>
-    <span style="color:var(--ink-3);font-size:12px;margin:0 8px">—</span>
-    <span style="color:var(--gold)">${winsB}</span>
-    ${pending ? `<span style="font-size:11px;color:var(--ink-3);margin-left:8px">(${pending} pending)</span>` : ''}
-    ${winner && !pending ? `<span style="font-size:12px;color:var(--green);margin-left:10px">🏆 ${esc(winner)} wins</span>` : ''}
-    ${winsA===winsB&&!pending&&frames.length ? `<span style="font-size:12px;color:var(--amber);margin-left:10px">Draw</span>` : ''}`;
+    <span style="color:var(--gold);font-size:18px">${totalA}</span>
+    <span style="color:var(--ink-3);font-size:14px;margin:0 10px">—</span>
+    <span style="color:var(--gold);font-size:18px">${totalB}</span>
+    ${pending ? `<span style="font-size:11px;color:var(--ink-3);margin-left:10px">(${pending} undecided)</span>` : ''}
+    ${winner && !pending ? `<span style="font-size:13px;color:var(--green);margin-left:12px">🏆 ${esc(winner)} wins</span>` : ''}
+    ${isDraw ? `<span style="font-size:13px;color:var(--amber);margin-left:12px">🤝 Draw</span>` : ''}`;
 }
 
 async function saveTeamScore(matchId) {
@@ -7459,27 +7494,48 @@ async function saveTeamScore(matchId) {
   if (!m) return;
 
   const frames = window._teamFrames || [];
-  const winsA  = frames.filter(f=>f.winnerA===true).length;
-  const winsB  = frames.filter(f=>f.winnerA===false).length;
+
+  // Count wins from frame log
+  let winsA = frames.filter(f => f.winnerA === true).length;
+  let winsB = frames.filter(f => f.winnerA === false).length;
+
+  // ── Allow manual override for tie-breakers / additional frames ──
+  // If user entered values in the manual score fields, add them to frame wins
+  const manualA = parseInt(document.getElementById('es-sa-extra')?.value || '0') || 0;
+  const manualB = parseInt(document.getElementById('es-sb-extra')?.value || '0') || 0;
+  winsA += manualA;
+  winsB += manualB;
 
   m.frameDetails = frames;
   m.scoreA = winsA;
   m.scoreB = winsB;
   m.date   = document.getElementById('es-date')?.value  || m.date || '';
   m.venue  = document.getElementById('es-venue')?.value.trim() || m.venue || '';
-  m.status = document.getElementById('es-status')?.value || m.status;
 
-  // Auto-complete if all frames decided
-  const pending = frames.filter(f=>f.winnerA===null).length;
-  if (pending === 0 && frames.length > 0) m.status = 'completed';
+  // Status: use dropdown value; only force completed if all frames decided AND scores differ
+  const statusEl = document.getElementById('es-status');
+  m.status = statusEl?.value || m.status;
 
-  // High break A/B = max break across all frame rows for each side
-  m.highBreakA = Math.max(0, ...frames.flatMap(f=>f.breaksA||[]).map(Number));
-  m.highBreakB = Math.max(0, ...frames.flatMap(f=>f.breaksB||[]).map(Number));
+  const pending  = frames.filter(f => f.winnerA === null).length;
+  const decided  = frames.length > 0 && pending === 0;
+  const hasScore = winsA > 0 || winsB > 0;
+
+  // Auto-complete only when there are actual scores and no pending frames
+  if (decided && hasScore && m.status !== 'live') {
+    m.status = 'completed';
+  } else if (m.status === 'completed' && !hasScore) {
+    // Don't mark completed with 0-0 — revert to scheduled
+    m.status = 'scheduled';
+  }
+
+  // High break = max break across all frame rows for each side
+  const allBreaksA = frames.flatMap(f => (f.breaksA || []).map(Number)).filter(Boolean);
+  const allBreaksB = frames.flatMap(f => (f.breaksB || []).map(Number)).filter(Boolean);
+  m.highBreakA = allBreaksA.length ? Math.max(...allBreaksA) : 0;
+  m.highBreakB = allBreaksB.length ? Math.max(...allBreaksB) : 0;
 
   await persistInLeague('matches', matchId, m);
 
-  // Save individual breaks from frame details
   if (m.status === 'completed') await extractAndSaveTeamBreaks(m);
 
   saveActiveToLocal();
