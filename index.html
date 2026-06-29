@@ -2865,9 +2865,27 @@ function computePlayerStats() {
       if(b){b.p++;b.fw+=m.scoreB;b.fl+=m.scoreA;if((m.highBreakB||0)>b.hb)b.hb=m.highBreakB;
         if(m.scoreB>m.scoreA){b.w++;b.pts+=pointsWin;}else if(m.scoreB<m.scoreA){b.l++;b.pts+=pointsLose;}else{b.d++;b.pts+=pointsDraw;}}
     } else {
+      // Team format: frame details per player matchup
+      // breaksA/breaksB are arrays of break scores (multiple per frame supported)
       (m.frameDetails||[]).forEach(f=>{
-        if(f.playerA&&map[f.playerA]){const pl=map[f.playerA];pl.p++;if(f.winnerA){pl.w++;pl.fw++;pl.pts+=pointsWin;}else{pl.l++;pl.fl++;pl.pts+=pointsLose;}if((f.breakA||0)>pl.hb)pl.hb=f.breakA;}
-        if(f.playerB&&map[f.playerB]){const pl=map[f.playerB];pl.p++;if(!f.winnerA){pl.w++;pl.fw++;pl.pts+=pointsWin;}else{pl.l++;pl.fl++;pl.pts+=pointsLose;}if((f.breakB||0)>pl.hb)pl.hb=f.breakB;}
+        if (f.playerA && map[f.playerA]) {
+          const pl=map[f.playerA]; pl.p++;
+          if (f.winnerA===true) { pl.w++; pl.fw++; pl.pts+=pointsWin; }
+          else if (f.winnerA===false) { pl.l++; pl.fl++; pl.pts+=pointsLose; }
+          // Max break from breaksA array
+          const maxBreakA = Math.max(0, ...(f.breaksA||[]).map(Number));
+          if (maxBreakA > pl.hb) pl.hb = maxBreakA;
+          // Legacy: single breakA field
+          if ((f.breakA||0) > pl.hb) pl.hb = f.breakA;
+        }
+        if (f.playerB && map[f.playerB]) {
+          const pl=map[f.playerB]; pl.p++;
+          if (f.winnerA===false) { pl.w++; pl.fw++; pl.pts+=pointsWin; }
+          else if (f.winnerA===true) { pl.l++; pl.fl++; pl.pts+=pointsLose; }
+          const maxBreakB = Math.max(0, ...(f.breaksB||[]).map(Number));
+          if (maxBreakB > pl.hb) pl.hb = maxBreakB;
+          if ((f.breakB||0) > pl.hb) pl.hb = f.breakB;
+        }
       });
     }
   });
@@ -7187,32 +7205,44 @@ async function saveMatch(){
 }
 
 function openScoreEntry(matchId){
-  const m=APP.matches.find(x=>x.id===matchId);
-  const aName=getName(m.entityA),bName=getName(m.entityB);
-  const isTeam=APP.config.format==='team';
-  const tA=isTeam?APP.teams.find(t=>t.id===m.entityA):null;
-  const tB=isTeam?APP.teams.find(t=>t.id===m.entityB):null;
-  const pA=tA?APP.players.filter(p=>tA.players.includes(p.id)):[];
-  const pB=tB?APP.players.filter(p=>tB.players.includes(p.id)):[];
-  const bo=APP.config.bestOf||7;
-  const fRows=Array.from({length:bo},(_,i)=>{
+  const m = APP.matches.find(x=>x.id===matchId);
+  if (!m) return;
+  const isTeam = APP.config.format === 'team';
+
+  if (isTeam) {
+    openTeamScoreEntry(m);
+  } else {
+    openIndividualScoreEntry(m);
+  }
+}
+
+// ── INDIVIDUAL SCORE ENTRY ────────────────────────────────
+function openIndividualScoreEntry(m) {
+  const aName = getName(m.entityA);
+  const bName = getName(m.entityB);
+  const bo = APP.config.bestOf || 7;
+
+  // Frame log rows
+  const fRows = Array.from({length:bo},(_,i)=>{
     const fd=(m.frameDetails||[])[i]||{};
-    return `<div style="display:grid;grid-template-columns:36px 1fr 1fr 1fr 1fr 1fr;gap:6px;padding:6px 10px;border-top:1px solid rgba(201,168,76,.05);font-size:12px;align-items:center">
+    return `<div style="display:grid;grid-template-columns:36px 1fr 90px 90px;gap:6px;padding:6px 10px;border-top:1px solid rgba(201,168,76,.05);font-size:12px;align-items:center">
       <div style="color:var(--ink-3)">F${i+1}</div>
-      <select id="fd-w-${i}" style="font-size:12px;padding:4px"><option value="">—</option><option value="A" ${fd.winnerA===true?'selected':''}>A wins</option><option value="B" ${fd.winnerA===false&&fd.winnerA!==undefined?'selected':''}>B wins</option></select>
-      ${isTeam?`<select id="fd-pa-${i}" style="font-size:12px;padding:4px"><option value="">A player</option>${pA.map(p=>`<option value="${p.id}" ${fd.playerA===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}</select>
-      <select id="fd-pb-${i}" style="font-size:12px;padding:4px"><option value="">B player</option>${pB.map(p=>`<option value="${p.id}" ${fd.playerB===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}</select>`
-      :`<div></div><div></div>`}
+      <select id="fd-w-${i}" style="font-size:12px;padding:4px">
+        <option value="">—</option>
+        <option value="A" ${fd.winnerA===true?'selected':''}>${esc(aName)} wins</option>
+        <option value="B" ${fd.winnerA===false&&fd.winnerA!==undefined?'selected':''}>${esc(bName)} wins</option>
+      </select>
       <input type="number" id="fd-ba-${i}" placeholder="Brk A" value="${fd.breakA||''}" min="0" max="147" style="font-size:12px;padding:4px">
       <input type="number" id="fd-bb-${i}" placeholder="Brk B" value="${fd.breakB||''}" min="0" max="147" style="font-size:12px;padding:4px">
     </div>`;
   }).join('');
 
-  openModal(`Score entry — ${aName} vs ${bName}`,
-    `<div class="alert alert-info" style="margin-bottom:14px">Scores sync from Max147 when connected. Frame log feeds Player Stats.</div>
-    <div class="form-row c2">
-      <div class="form-field"><label>Frames — ${aName}</label><input id="es-sa" type="number" min="0" value="${m.scoreA}" oninput="checkAutoComplete(${JSON.stringify(APP.config.bestOf||7)})"></div>
-      <div class="form-field"><label>Frames — ${bName}</label><input id="es-sb" type="number" min="0" value="${m.scoreB}" oninput="checkAutoComplete(${JSON.stringify(APP.config.bestOf||7)})"></div>
+  openModal(`Score — ${aName} vs ${bName}`,
+    `<div class="form-row c2">
+      <div class="form-field"><label>Frames won — ${esc(aName)}</label>
+        <input id="es-sa" type="number" min="0" value="${m.scoreA}" oninput="checkAutoComplete(${bo})"></div>
+      <div class="form-field"><label>Frames won — ${esc(bName)}</label>
+        <input id="es-sb" type="number" min="0" value="${m.scoreB}" oninput="checkAutoComplete(${bo})"></div>
     </div>
     <div style="font-size:11px;color:var(--ink-3);margin:-6px 0 10px" id="es-auto-note"></div>
     <div class="form-row c2">
@@ -7224,17 +7254,274 @@ function openScoreEntry(matchId){
       <div class="form-field"><label>Venue</label><input id="es-venue" value="${esc(m.venue||'')}" placeholder="Venue"></div>
     </div>
     <div class="form-row"><div class="form-field"><label>Status</label>
-      <select id="es-status"><option value="scheduled" ${m.status==='scheduled'?'selected':''}>Scheduled</option><option value="live" ${m.status==='live'?'selected':''}>Live</option><option value="completed" ${m.status==='completed'?'selected':''}>Completed</option></select>
+      <select id="es-status">
+        <option value="scheduled" ${m.status==='scheduled'?'selected':''}>Scheduled</option>
+        <option value="live"      ${m.status==='live'?'selected':''}>Live</option>
+        <option value="completed" ${m.status==='completed'?'selected':''}>Completed</option>
+      </select>
     </div></div>
     <div style="margin:14px 0 6px;font-size:11px;font-weight:600;color:var(--ink-2);text-transform:uppercase;letter-spacing:.05em">Frame log (optional)</div>
     <div style="background:var(--bg-mid);border-radius:var(--r);overflow:hidden">
-      <div style="display:grid;grid-template-columns:36px 1fr 1fr 1fr 1fr 1fr;gap:6px;padding:6px 10px;background:var(--bg);font-size:10px;font-weight:600;color:var(--ink-3);text-transform:uppercase">
-        <div>#</div><div>Winner</div>${isTeam?'<div>A Player</div><div>B Player</div>':'<div></div><div></div>'}<div>Brk A</div><div>Brk B</div>
+      <div style="display:grid;grid-template-columns:36px 1fr 90px 90px;gap:6px;padding:6px 10px;background:var(--bg);font-size:10px;font-weight:600;color:var(--ink-3);text-transform:uppercase">
+        <div>#</div><div>Winner</div><div>Brk A</div><div>Brk B</div>
       </div>${fRows}
     </div>`,
     `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveScore('${matchId}')">Save & update leaderboard</button>`
+     <button class="btn btn-primary" onclick="saveScore('${m.id}')">Save & update leaderboard</button>`
   );
+}
+
+// ── TEAM SCORE ENTRY ──────────────────────────────────────
+// Each row = one player matchup within the team match
+// scoreA/B = count of individual player wins (auto-calculated from frame log)
+// Multiple high breaks per player supported via "+" button
+function openTeamScoreEntry(m) {
+  const tA = APP.teams.find(t=>t.id===m.entityA);
+  const tB = APP.teams.find(t=>t.id===m.entityB);
+  const aName = tA ? tA.name : m.entityA;
+  const bName = tB ? tB.name : m.entityB;
+  const pA = tA ? APP.players.filter(p=>(tA.players||[]).includes(p.id)) : [];
+  const pB = tB ? APP.players.filter(p=>(tB.players||[]).includes(p.id)) : [];
+
+  // Existing frame details
+  const frames = m.frameDetails && m.frameDetails.length
+    ? m.frameDetails
+    : Array.from({length: Math.max(pA.length, pB.length, 1)}, (_,i) => ({
+        playerA: pA[i]?.id || '', playerB: pB[i]?.id || '',
+        winnerA: null, breaksA:[], breaksB:[]
+      }));
+
+  window._teamFrames = frames.map(f => ({...f, breaksA:[...(f.breaksA||[])], breaksB:[...(f.breaksB||[])]}));
+  window._teamPA     = pA;
+  window._teamPB     = pB;
+  window._teamAName  = aName;
+  window._teamBName  = bName;
+
+  openModal(`Score — ${esc(aName)} vs ${esc(bName)}`,
+    `<div class="form-row c2">
+      <div class="form-field"><label>Date</label><input id="es-date" type="date" value="${m.date||''}"></div>
+      <div class="form-field"><label>Venue</label><input id="es-venue" value="${esc(m.venue||'')}" placeholder="Venue"></div>
+    </div>
+    <div class="form-row"><div class="form-field"><label>Status</label>
+      <select id="es-status">
+        <option value="scheduled" ${m.status==='scheduled'?'selected':''}>Scheduled</option>
+        <option value="live"      ${m.status==='live'?'selected':''}>Live</option>
+        <option value="completed" ${m.status==='completed'?'selected':''}>Completed</option>
+      </select>
+    </div></div>
+
+    <div style="margin:14px 0 6px;display:flex;align-items:center;justify-content:space-between">
+      <span style="font-size:11px;font-weight:600;color:var(--ink-2);text-transform:uppercase;letter-spacing:.05em">
+        Player matchups — wins count as team score
+      </span>
+      <button class="btn btn-ghost btn-xs" onclick="addTeamFrameRow()">+ Add row</button>
+    </div>
+    <div id="team-frame-rows"></div>
+
+    <div id="team-score-summary" style="margin-top:12px;padding:12px;background:var(--bg-raised);border-radius:var(--r);text-align:center;font-size:14px;font-weight:700;color:var(--gold)"></div>`,
+    `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="saveTeamScore('${m.id}')">Save & update leaderboard</button>`
+  );
+
+  renderTeamFrameRows(pA, pB, aName, bName);
+}
+
+function renderTeamFrameRows(pA, pB, aName, bName) {
+  const frames = window._teamFrames || [];
+  const container = document.getElementById('team-frame-rows');
+  if (!container) return;
+
+  container.innerHTML = frames.map((f, i) => `
+    <div style="background:var(--bg-raised);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;margin-bottom:8px" id="tfr-${i}">
+      <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:center;margin-bottom:8px">
+        <select style="font-size:12px;padding:5px" onchange="teamFrameSetPlayer(${i},'A',this.value)">
+          <option value="">— ${esc(aName)} player —</option>
+          ${pA.map(p=>`<option value="${p.id}" ${f.playerA===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}
+        </select>
+        <div style="display:flex;gap:6px;align-items:center">
+          <button class="btn btn-xs ${f.winnerA===true?'btn-primary':'btn-ghost'}"
+            onclick="teamFrameSetWinner(${i},'A')" title="${esc(aName)} wins this frame">W</button>
+          <span style="font-size:10px;color:var(--ink-3)">vs</span>
+          <button class="btn btn-xs ${f.winnerA===false?'btn-primary':'btn-ghost'}"
+            onclick="teamFrameSetWinner(${i},'B')" title="${esc(bName)} wins this frame">W</button>
+        </div>
+        <select style="font-size:12px;padding:5px" onchange="teamFrameSetPlayer(${i},'B',this.value)">
+          <option value="">— ${esc(bName)} player —</option>
+          ${pB.map(p=>`<option value="${p.id}" ${f.playerB===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}
+        </select>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div>
+          <div style="font-size:10px;color:var(--ink-3);margin-bottom:4px">High breaks — ${esc(aName)}</div>
+          <div id="breaks-a-${i}" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px">
+            ${(f.breaksA||[]).map((b,bi)=>`
+              <span style="display:inline-flex;align-items:center;gap:3px;background:var(--bg-card);border:1px solid var(--border);border-radius:20px;padding:2px 8px;font-size:12px">
+                ${b}<button onclick="teamFrameRemoveBreak(${i},'A',${bi})" style="background:none;border:none;color:var(--red);cursor:pointer;padding:0;font-size:12px;line-height:1">×</button>
+              </span>`).join('')}
+          </div>
+          <div style="display:flex;gap:4px">
+            <input type="number" id="break-a-input-${i}" min="0" max="147" placeholder="Score" style="font-size:12px;padding:4px;width:70px">
+            <button class="btn btn-ghost btn-xs" onclick="teamFrameAddBreak(${i},'A')">+ Break</button>
+          </div>
+        </div>
+        <div>
+          <div style="font-size:10px;color:var(--ink-3);margin-bottom:4px">High breaks — ${esc(bName)}</div>
+          <div id="breaks-b-${i}" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px">
+            ${(f.breaksB||[]).map((b,bi)=>`
+              <span style="display:inline-flex;align-items:center;gap:3px;background:var(--bg-card);border:1px solid var(--border);border-radius:20px;padding:2px 8px;font-size:12px">
+                ${b}<button onclick="teamFrameRemoveBreak(${i},'B',${bi})" style="background:none;border:none;color:var(--red);cursor:pointer;padding:0;font-size:12px;line-height:1">×</button>
+              </span>`).join('')}
+          </div>
+          <div style="display:flex;gap:4px">
+            <input type="number" id="break-b-input-${i}" min="0" max="147" placeholder="Score" style="font-size:12px;padding:4px;width:70px">
+            <button class="btn btn-ghost btn-xs" onclick="teamFrameAddBreak(${i},'B')">+ Break</button>
+          </div>
+        </div>
+      </div>
+      ${frames.length>1?`<div style="text-align:right;margin-top:6px">
+        <button class="btn btn-danger btn-xs" onclick="removeTeamFrameRow(${i})">Remove row</button>
+      </div>`:''}
+    </div>`).join('');
+
+  updateTeamScoreSummary();
+}
+
+function teamFrameSetPlayer(i, side, pid) {
+  if (!window._teamFrames[i]) return;
+  if (side==='A') window._teamFrames[i].playerA = pid;
+  else            window._teamFrames[i].playerB = pid;
+}
+
+function teamFrameSetWinner(i, side) {
+  if (!window._teamFrames[i]) return;
+  const f = window._teamFrames[i];
+  // Toggle: clicking the already-selected side clears it
+  if (side==='A') f.winnerA = f.winnerA===true  ? null : true;
+  else            f.winnerA = f.winnerA===false ? null : false;
+  // Re-render just this row's buttons
+  updateTeamScoreSummary();
+  // Refresh button styles without full re-render
+  const pA = window._teamPA || []; const pB = window._teamPB || [];
+  const aName = window._teamAName || ''; const bName = window._teamBName || '';
+  renderTeamFrameRows(pA, pB, aName, bName);
+}
+
+function teamFrameAddBreak(i, side) {
+  const inp = document.getElementById(`break-${side.toLowerCase()}-input-${i}`);
+  const val = Math.round(+inp?.value || 0);
+  if (!val || val < 1 || val > 147) { toast('Enter a break score between 1 and 147'); return; }
+  const f = window._teamFrames[i];
+  if (side==='A') f.breaksA = [...(f.breaksA||[]), val];
+  else            f.breaksB = [...(f.breaksB||[]), val];
+  if (inp) inp.value = '';
+  // Re-render just the breaks containers
+  const pA = window._teamPA || []; const pB = window._teamPB || [];
+  renderTeamFrameRows(pA, pB, window._teamAName||'', window._teamBName||'');
+}
+
+function teamFrameRemoveBreak(i, side, bi) {
+  const f = window._teamFrames[i];
+  if (side==='A') f.breaksA = (f.breaksA||[]).filter((_,idx)=>idx!==bi);
+  else            f.breaksB = (f.breaksB||[]).filter((_,idx)=>idx!==bi);
+  renderTeamFrameRows(window._teamPA||[], window._teamPB||[], window._teamAName||'', window._teamBName||'');
+}
+
+function addTeamFrameRow() {
+  window._teamFrames = window._teamFrames || [];
+  window._teamFrames.push({playerA:'', playerB:'', winnerA:null, breaksA:[], breaksB:[]});
+  renderTeamFrameRows(window._teamPA||[], window._teamPB||[], window._teamAName||'', window._teamBName||'');
+}
+
+function removeTeamFrameRow(i) {
+  window._teamFrames.splice(i,1);
+  renderTeamFrameRows(window._teamPA||[], window._teamPB||[], window._teamAName||'', window._teamBName||'');
+}
+
+function updateTeamScoreSummary() {
+  const frames = window._teamFrames || [];
+  const winsA = frames.filter(f=>f.winnerA===true).length;
+  const winsB = frames.filter(f=>f.winnerA===false).length;
+  const pending = frames.filter(f=>f.winnerA===null).length;
+  const el = document.getElementById('team-score-summary');
+  if (!el) return;
+  const winner = winsA > winsB ? (window._teamAName||'A') : winsA < winsB ? (window._teamBName||'B') : null;
+  el.innerHTML = `
+    <span style="color:var(--gold)">${winsA}</span>
+    <span style="color:var(--ink-3);font-size:12px;margin:0 8px">—</span>
+    <span style="color:var(--gold)">${winsB}</span>
+    ${pending ? `<span style="font-size:11px;color:var(--ink-3);margin-left:8px">(${pending} pending)</span>` : ''}
+    ${winner && !pending ? `<span style="font-size:12px;color:var(--green);margin-left:10px">🏆 ${esc(winner)} wins</span>` : ''}
+    ${winsA===winsB&&!pending&&frames.length ? `<span style="font-size:12px;color:var(--amber);margin-left:10px">Draw</span>` : ''}`;
+}
+
+async function saveTeamScore(matchId) {
+  const m = APP.matches.find(x=>x.id===matchId);
+  if (!m) return;
+
+  const frames = window._teamFrames || [];
+  const winsA  = frames.filter(f=>f.winnerA===true).length;
+  const winsB  = frames.filter(f=>f.winnerA===false).length;
+
+  m.frameDetails = frames;
+  m.scoreA = winsA;
+  m.scoreB = winsB;
+  m.date   = document.getElementById('es-date')?.value  || m.date || '';
+  m.venue  = document.getElementById('es-venue')?.value.trim() || m.venue || '';
+  m.status = document.getElementById('es-status')?.value || m.status;
+
+  // Auto-complete if all frames decided
+  const pending = frames.filter(f=>f.winnerA===null).length;
+  if (pending === 0 && frames.length > 0) m.status = 'completed';
+
+  // High break A/B = max break across all frame rows for each side
+  m.highBreakA = Math.max(0, ...frames.flatMap(f=>f.breaksA||[]).map(Number));
+  m.highBreakB = Math.max(0, ...frames.flatMap(f=>f.breaksB||[]).map(Number));
+
+  await persistInLeague('matches', matchId, m);
+
+  // Save individual breaks from frame details
+  if (m.status === 'completed') await extractAndSaveTeamBreaks(m);
+
+  saveActiveToLocal();
+  closeModal();
+  toast('Score saved ✓');
+  render();
+}
+
+async function extractAndSaveTeamBreaks(m) {
+  const threshold = APP.config.highBreakThreshold || 50;
+  const existing  = new Set(APP.breaks.map(b=>b.id));
+  const toAdd = [];
+
+  (m.frameDetails||[]).forEach((f, fi) => {
+    const pA = APP.players.find(p=>p.id===f.playerA);
+    const pB = APP.players.find(p=>p.id===f.playerB);
+
+    // Multiple breaks per player per frame
+    (f.breaksA||[]).forEach((score,bi) => {
+      score = +score;
+      if (score < threshold) return;
+      const id = `${m.id}-f${fi}-a${bi}`;
+      if (!existing.has(id)) {
+        toAdd.push({ id, playerId:f.playerA, playerName:pA?.name||'', score,
+          matchId:m.id, date:m.date||'', venue:m.venue||'', frame:fi+1 });
+      }
+    });
+    (f.breaksB||[]).forEach((score,bi) => {
+      score = +score;
+      if (score < threshold) return;
+      const id = `${m.id}-f${fi}-b${bi}`;
+      if (!existing.has(id)) {
+        toAdd.push({ id, playerId:f.playerB, playerName:pB?.name||'', score,
+          matchId:m.id, date:m.date||'', venue:m.venue||'', frame:fi+1 });
+      }
+    });
+  });
+
+  for (const b of toAdd) {
+    APP.breaks.push(b);
+    await persistInLeague('breaks', b.id, b);
+  }
 }
 
 // ── AUTO-COMPLETE HINT ────────────────────────────────────
