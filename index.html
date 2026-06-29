@@ -5946,19 +5946,30 @@ function renderBracket(isGroupKO=false) {
   let wBracketHTML = `<div style="display:flex;align-items:flex-start;gap:0;position:relative">
     <svg id="bracket-svg-w" class="bracket-svg" width="100%" height="100%"></svg>`;
 
-  // Use the first round's count to determine the canonical bracket height
-  // Every subsequent round halves the matches — height stays fixed so
-  // SVG connectors always bisect cleanly between pairs
-  const baseMatchCount = wRounds.length ? wRounds[0].length : 1;
-  const SLOT_H = 110; // px per match slot — tall enough to avoid overlap
-  const BRACKET_H = baseMatchCount * SLOT_H; // fixed height for all rounds
+  // Base height on the LARGEST visible round (exclude BYE-only matches from R1)
+  const visibleR1 = wRounds.length
+    ? wRounds[0].filter(m => !(m.status==='completed' && (m.entityA==='BYE'||m.entityB==='BYE'))).length
+    : 0;
+  // R2 always has half the slots of the full bracket — use that as the canonical height base
+  const baseMatchCount = wRounds.length > 1 ? wRounds[1].length : Math.max(visibleR1, 1);
+  const SLOT_H    = 110;
+  const BRACKET_H = baseMatchCount * SLOT_H;
 
   wRounds.forEach((round, ri) => {
-    const rNum = ri+1;
+    const rNum = ri + 1;
+    // Filter out auto-completed BYE matches from display
+    // They've already advanced the player to R2 via advanceBracket
+    const displayMatches = round.filter(m =>
+      !(m.status === 'completed' && (m.entityA === 'BYE' || m.entityB === 'BYE'))
+    );
+    // Skip rendering rounds that have no visible matches
+    // (e.g. if ALL R1 matches were BYEs → n is a power of 2 edge case)
+    if (displayMatches.length === 0) return;
+
     wBracketHTML += `<div class="bracket-round" style="height:${BRACKET_H + 24}px">
       <div class="bracket-round-label">${roundLabel(rNum, wTotal, 'W')}</div>
       <div class="bracket-slots">`;
-    round.forEach(m => {
+    displayMatches.forEach(m => {
       wBracketHTML += `<div style="display:flex;align-items:center">${renderBracketMatch(m)}</div>`;
     });
     wBracketHTML += `</div></div>`;
@@ -6406,169 +6417,103 @@ async function commitSeedBracket(playerIds) {
   const isDouble = ct === 'double_elim';
   const n        = playerIds.length;
 
-  // ── Bracket sizing ────────────────────────────────────────
-  let p = 1; while (p < n) p *= 2;   // next power of 2
+  // ── Find bracket size: next power of 2 >= n ──────────────
+  let p = 1; while (p < n) p *= 2;
 
-  // Play-in (R1) only for excess players beyond p/2
-  //   halfP     = p/2  = size of "main bracket" entering R2
-  //   r1Matches = n - p/2   (excess players must play off)
-  //   byeCount  = p   - n   (players who skip R1 entirely)
-  const halfP     = p / 2;
-  const r1Matches = n - halfP;          // 0 when n is power of 2
-  const byeCount  = p - n;             // = halfP - r1Matches
-
-  // ── Generate bracket using standard seeding ────────────
-  // singleElimSeeds(p)[slot] = 1-indexed seed for that bracket slot
-  // Adjacent pairs of slots feed one R2 match each.
+  // ── Standard seeding order ───────────────────────────────
+  // singleElimSeeds(p) returns an array of length p where
+  // singleElimSeeds[slot] = 1-indexed seed number.
+  // Standard pattern ensures seed1 vs seed2 in the Final
+  // if all top seeds win every match.
   function singleElimSeeds(size) {
     if (size === 1) return [1];
     const prev = singleElimSeeds(size / 2);
-    const result = [];
+    const out  = [];
     for (const s of prev) {
-      result.push(s);
-      result.push(size + 1 - s);
+      out.push(s);
+      out.push(size + 1 - s);
     }
-    return result;
+    return out;
   }
-  const seedsInSlots = singleElimSeeds(p);
 
-  const newMatches = [];
-  let r1Idx = 0;
+  const seeds = singleElimSeeds(p);
+  // seeds[slot] = 1-indexed seed. Map to player: playerIds[seed-1], or 'BYE' if seed > n.
+  const byPlayer = slot => seeds[slot] <= n ? playerIds[seeds[slot] - 1] : 'BYE';
 
-  for (let i = 0; i < halfP; i++) {
-    const seedA = seedsInSlots[2 * i];
-    const seedB = seedsInSlots[2 * i + 1];
-    // Map to player (undefined/null if seed > n → no player → bye)
-    const pA = seedA <= n ? playerIds[seedA - 1] : null;
-    const pB = seedB <= n ? playerIds[seedB - 1] : null;
+  // ── Generate ALL rounds as a full p-player bracket ───────
+  // Round 1: p/2 matches  (e.g. p=16 → 8 matches)
+  // Round 2: p/4 matches  (e.g. 4 matches = QF)
+  // Round 3: p/8 matches  (SF)
+  // Round 4: 1 match      (Final)
+  const totalRounds = Math.log2(p);
+  const newMatches  = [];
 
-    if (!pA && !pB) continue; // both empty — skip (shouldn't happen)
-
-    if (!pA) {
-      // Only pB exists — auto-advance directly to R2
-      newMatches.push({ id:genId(), round:2, matchIndex:i, slot:'W',
-        entityA:pB, entityB:'TBD', scoreA:0, scoreB:0, status:'scheduled',
-        winnerId:null, loserId:null, date:'', venue:'' });
-    } else if (!pB) {
-      // Only pA exists — auto-advance directly to R2
-      newMatches.push({ id:genId(), round:2, matchIndex:i, slot:'W',
-        entityA:pA, entityB:'TBD', scoreA:0, scoreB:0, status:'scheduled',
-        winnerId:null, loserId:null, date:'', venue:'' });
-    } else if (seedA <= byeCount && seedB <= byeCount) {
-      // Both have byes — meet directly in R2, no R1 match
-      newMatches.push({ id:genId(), round:2, matchIndex:i, slot:'W',
-        entityA:pA, entityB:pB, scoreA:0, scoreB:0, status:'scheduled',
-        winnerId:null, loserId:null, date:'', venue:'' });
-    } else if (seedA <= byeCount) {
-      // pA has bye, pB plays R1 against their paired opponent
-      // pB's R1 partner is found below (paired from the next non-bye slot)
-      // For now: create R2 match with pA and TBD, create R1 placeholder for pB
-      const r2M = { id:genId(), round:2, matchIndex:i, slot:'W',
-        entityA:pA, entityB:'TBD', scoreA:0, scoreB:0, status:'scheduled',
-        winnerId:null, loserId:null, date:'', venue:'' };
-      newMatches.push(r2M);
-      // pB needs a play-in match — store reference to be paired
-      newMatches.push({ id:genId(), round:1, matchIndex:-1, slot:'W',
-        entityA:pB, entityB:'TBD', scoreA:0, scoreB:0, status:'scheduled',
-        winnerId:null, loserId:null, date:'', venue:'',
-        _feedsR2:r2M.id, _feedsSlot:'B', _pendingPair:true });
-    } else if (seedB <= byeCount) {
-      // pB has bye, pA plays R1
-      const r2M = { id:genId(), round:2, matchIndex:i, slot:'W',
-        entityA:'TBD', entityB:pB, scoreA:0, scoreB:0, status:'scheduled',
-        winnerId:null, loserId:null, date:'', venue:'' };
-      newMatches.push(r2M);
-      newMatches.push({ id:genId(), round:1, matchIndex:-1, slot:'W',
-        entityA:pA, entityB:'TBD', scoreA:0, scoreB:0, status:'scheduled',
-        winnerId:null, loserId:null, date:'', venue:'',
-        _feedsR2:r2M.id, _feedsSlot:'A', _pendingPair:true });
-    } else {
-      // Both play R1 (no byes in this pairing)
-      const r2M = { id:genId(), round:2, matchIndex:i, slot:'W',
-        entityA:'TBD', entityB:'TBD', scoreA:0, scoreB:0, status:'scheduled',
-        winnerId:null, loserId:null, date:'', venue:'' };
-      const r1M = { id:genId(), round:1, matchIndex:r1Idx++, slot:'W',
-        entityA:pA, entityB:pB, scoreA:0, scoreB:0, status:'scheduled',
-        winnerId:null, loserId:null, date:'', venue:'',
-        _feedsR2:r2M.id, _feedsSlot:'A' };
-      newMatches.push(r1M, r2M);
+  for (let r = 1; r <= totalRounds; r++) {
+    const matchCount = p / Math.pow(2, r);
+    for (let i = 0; i < matchCount; i++) {
+      // For R1, fill entity slots from seeding; later rounds start TBD
+      const entityA = r === 1 ? byPlayer(2 * i)     : 'TBD';
+      const entityB = r === 1 ? byPlayer(2 * i + 1) : 'TBD';
+      const m = {
+        id:genId(), round:r, matchIndex:i, slot:'W',
+        entityA, entityB,
+        scoreA:0, scoreB:0,
+        status:'scheduled',
+        winnerId:null, loserId:null, date:'', venue:''
+      };
+      // Auto-complete BYE matches immediately
+      if (r === 1 && (entityA === 'BYE' || entityB === 'BYE')) {
+        m.status    = 'completed';
+        m.winnerId  = entityA === 'BYE' ? entityB : entityA;
+        m.loserId   = entityA === 'BYE' ? entityA : entityB;
+      }
+      newMatches.push(m);
     }
   }
 
-  // Pair up the _pendingPair R1 players (they play each other)
-  const pending = newMatches.filter(m => m._pendingPair);
-  for (let i = 0; i + 1 < pending.length; i += 2) {
-    const mA = pending[i], mB = pending[i + 1];
-    // mA plays mB — merge into one R1 match
-    mA.entityB     = mB.entityA;
-    mA.matchIndex  = r1Idx++;
-    mA._pendingPair = false;
-    // The R2 match for mB is now fed by mA winning
-    // Store second _feedsR2 in mA as an array if needed
-    // For simplicity: mA winner goes to mA._feedsR2 (already set)
-    // mB's R2 match gets the loser... no — in single elim only winner advances
-    // mB's R2 slot (which had TBD) should be fed by mA winner — but there are two R2 slots
-    // Solution: each pending player has their OWN R2 slot → they can't both be served by one match
-    // This means these two players will play R1 and ONE winner goes to mA's R2 slot
-    // The OTHER (mB's) R2 slot remains TBD... this is a problem.
-    // Fix: when both are paired this way, the R2 slot that was going to wait
-    // should instead wait for this R1 winner. Only ONE R2 slot survives.
-    // Mark mB's R2 slot for removal
-    const mBr2 = newMatches.find(m => m.id === mB._feedsR2);
-    if (mBr2) { mBr2._remove = true; }
-    newMatches.splice(newMatches.indexOf(mB), 1);
-  }
-  // Handle odd pending (shouldn't happen, but just in case)
-  pending.filter(m => m._pendingPair).forEach(m => { m.matchIndex = r1Idx++; m._pendingPair = false; });
-  // Remove marked R2 slots
-  const toRemove = newMatches.filter(m => m._remove);
-  toRemove.forEach(m => newMatches.splice(newMatches.indexOf(m), 1));
-  // Re-index R2 matches so matchIndex is sequential
-  const r2Only = newMatches.filter(m=>m.slot==='W'&&m.round===2).sort((a,b)=>a.matchIndex-b.matchIndex);
-  r2Only.forEach((m,i) => m.matchIndex = i);
-
-  // ── Rounds 3+ (standard single elim from R2 onwards) ────
-  let roundSize = p / 4;  // R3 match count
-  let roundNum  = 3;
-  while (roundSize >= 1) {
-    for (let i = 0; i < roundSize; i++) {
-      newMatches.push({ id:genId(), round:roundNum, matchIndex:i, slot:'W',
-        entityA:'TBD', entityB:'TBD',
-        scoreA:0, scoreB:0, status:'scheduled',
-        winnerId:null, loserId:null, date:'', venue:'' });
-    }
-    if (roundSize === 1) break;
-    roundSize = Math.floor(roundSize / 2);
-    roundNum++;
-  }
-
-  // ── DOUBLE ELIM: losers bracket ──────────────────────────
+  // ── Double elim: losers bracket + GF ─────────────────────
   if (isDouble) {
-    const wbRounds   = Math.ceil(Math.log2(p));
-    const lbTotalRds = 2 * (wbRounds - 1);
-    for (let r = 1; r <= lbTotalRds; r++) {
+    const lbRounds = 2 * (totalRounds - 1);
+    for (let r = 1; r <= lbRounds; r++) {
       const refOdd     = r % 2 === 1 ? r : r - 1;
       const matchCount = Math.max(1, p / Math.pow(2, Math.ceil(refOdd / 2) + 1));
       for (let i = 0; i < matchCount; i++) {
-        newMatches.push({ id:genId(), round:r, matchIndex:i, slot:'L', entityA:'TBD', entityB:'TBD', scoreA:0, scoreB:0, status:'scheduled', winnerId:null, loserId:null, date:'', venue:'' });
+        newMatches.push({ id:genId(), round:r, matchIndex:i, slot:'L',
+          entityA:'TBD', entityB:'TBD', scoreA:0, scoreB:0,
+          status:'scheduled', winnerId:null, loserId:null, date:'', venue:'' });
       }
     }
-    newMatches.push({ id:genId(), round:1, matchIndex:0, slot:'GF', entityA:'TBD', entityB:'TBD', scoreA:0, scoreB:0, status:'scheduled', winnerId:null, loserId:null, date:'', venue:'' });
-    newMatches.push({ id:genId(), round:2, matchIndex:0, slot:'GF', entityA:'TBD', entityB:'TBD', scoreA:0, scoreB:0, status:'if_needed', winnerId:null, loserId:null, date:'', venue:'' });
+    newMatches.push({ id:genId(), round:1, matchIndex:0, slot:'GF',
+      entityA:'TBD', entityB:'TBD', scoreA:0, scoreB:0,
+      status:'scheduled', winnerId:null, loserId:null, date:'', venue:'' });
+    newMatches.push({ id:genId(), round:2, matchIndex:0, slot:'GF',
+      entityA:'TBD', entityB:'TBD', scoreA:0, scoreB:0,
+      status:'if_needed', winnerId:null, loserId:null, date:'', venue:'' });
   }
 
+  // ── Auto-advance BYE winners into next round ─────────────
+  // Process R1 completed (BYE) matches in order so winners
+  // cascade into R2 slots correctly
   APP.bracketMatches = newMatches;
+  newMatches
+    .filter(m => m.round === 1 && m.status === 'completed')
+    .sort((a, b) => a.matchIndex - b.matchIndex)
+    .forEach(m => advanceBracket(m));
+
   autoAssignBracketDates(newMatches);
   await Promise.all(newMatches.map(m => persistInLeague('bracketMatches', m.id, m)));
   saveActiveToLocal();
   closeModal();
 
-  const byeMsg = byeCount > 0
-    ? ` — ${byeCount} top seed${byeCount!==1?'s':''} get a bye into R2`
+  const byeCount = p - n;
+  const byeMsg   = byeCount > 0
+    ? ` — ${byeCount} top seed${byeCount !== 1 ? 's' : ''} get a bye`
     : '';
-  toast(`Bracket seeded${byeMsg} ✓`);
+  toast(`Bracket seeded ✓${byeMsg}`);
   render();
-  requestAnimationFrame(()=>{ try { drawBracketLines(); } catch(e){ console.warn('drawBracketLines:',e.message); } });
+  requestAnimationFrame(() => {
+    try { drawBracketLines(); } catch(e) { console.warn('drawBracketLines:', e.message); }
+  });
 }
 
 
@@ -6588,34 +6533,21 @@ function advanceBracket(completedMatch) {
 
   // ── Winners bracket progression ──
   if (slot === 'W') {
-    // R1 play-in matches use _feedsR2/_feedsSlot for precise R2 slot routing
-    const feedsR2   = completedMatch._feedsR2;
-    const feedsSlot = completedMatch._feedsSlot;
-    let nextWB;
-    if (round === 1 && feedsR2) {
-      nextWB = APP.bracketMatches.find(m => m.id === feedsR2);
-      if (nextWB) {
-        if (feedsSlot === 'A' && nextWB.entityA === 'TBD')      nextWB.entityA = winnerId;
-        else if (feedsSlot === 'B' && nextWB.entityB === 'TBD') nextWB.entityB = winnerId;
-        else if (nextWB.entityA === 'TBD')                       nextWB.entityA = winnerId;
-        else if (nextWB.entityB === 'TBD')                       nextWB.entityB = winnerId;
-        if (nextWB.entityA !== 'TBD' && nextWB.entityB !== 'TBD') nextWB.status = 'scheduled';
-      }
-    } else {
-      const nextRound    = round + 1;
-      const nextMatchIdx = Math.floor(matchIndex / 2);
-      nextWB = APP.bracketMatches.find(m => m.slot==='W' && m.round===nextRound && m.matchIndex===nextMatchIdx);
-      if (nextWB) {
-        if (nextWB.entityA === 'TBD')      nextWB.entityA = winnerId;
-        else if (nextWB.entityB === 'TBD') nextWB.entityB = winnerId;
-        if (nextWB.entityA !== 'TBD' && nextWB.entityB !== 'TBD') nextWB.status = 'scheduled';
-      }
-    }
-    if (!nextWB && isDouble) {
-      const gf = APP.bracketMatches.find(m => m.slot==='GF');
-      if (gf && gf.entityA==='TBD') {
+    // Clean power-of-2 bracket — simple floor(matchIndex/2) routing always works
+    const nextRound    = round + 1;
+    const nextMatchIdx = Math.floor(matchIndex / 2);
+    const nextWB = APP.bracketMatches.find(m =>
+      m.slot === 'W' && m.round === nextRound && m.matchIndex === nextMatchIdx
+    );
+    if (nextWB) {
+      if (nextWB.entityA === 'TBD')      nextWB.entityA = winnerId;
+      else if (nextWB.entityB === 'TBD') nextWB.entityB = winnerId;
+      if (nextWB.entityA !== 'TBD' && nextWB.entityB !== 'TBD') nextWB.status = 'scheduled';
+    } else if (isDouble) {
+      const gf = APP.bracketMatches.find(m => m.slot === 'GF' && m.round === 1);
+      if (gf && gf.entityA === 'TBD') {
         gf.entityA = winnerId;
-        if (gf.entityA!=='TBD' && gf.entityB!=='TBD') gf.status='scheduled';
+        if (gf.entityA !== 'TBD' && gf.entityB !== 'TBD') gf.status = 'scheduled';
       }
     }
 
