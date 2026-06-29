@@ -6402,124 +6402,115 @@ function autoAssignBracketDates(matches) {
 
 
 async function commitSeedBracket(playerIds) {
-  const ct      = APP.config.competitionType;
+  const ct       = APP.config.competitionType;
   const isDouble = ct === 'double_elim';
   const n        = playerIds.length;
 
-  // ── Bracket size calculation ─────────────────────────────
+  // ── Bracket structure ─────────────────────────────────────
   // Find next power of 2 >= n
-  let p = 1;
-  while (p < n) p *= 2;
+  let p = 1; while (p < n) p *= 2;
 
-  const halfP     = p / 2;         // size of Round 2
-  const r1Matches = n - halfP;     // play-in matches in Round 1
-  const byeCount  = n - r1Matches * 2;  // players who skip to Round 2
+  // R1 (play-in): only for the lowest seeds
+  //   r1Matches = n - p/2   (extra players beyond p/2)
+  //   byeCount  = p/2 - r1Matches = p - n  (players who skip R1)
+  const halfP      = p / 2;          // players advancing to R2
+  const r1Matches  = n - halfP;      // play-in matches in R1
+  const byeCount   = halfP - r1Matches;  // players with a bye (= p - n)
 
-  // ── Standard seeding position array ──────────────────────
-  // Seeds are distributed so top seeds end up on opposite halves.
-  // Returns array of length halfP: which player (by index in playerIds)
-  // occupies each R2 slot.
-  //
-  // Standard pattern for halfP=8 (16-player bracket):
-  //   Slot: 0   1   2   3   4   5   6   7
-  //   Seed: 1   8   5   4   3   6   7   2
-  // This ensures seed1 vs seed2 in the final if all top seeds win.
-  function seedOrder(size) {
-    if (size === 1) return [0];
-    const result = new Array(size);
-    result[0] = 0;
-    result[size-1] = 1;
-    function place(lo, hi, nextSeed) {
-      if (lo > hi || nextSeed >= size) return;
-      const mid = Math.floor((lo+hi)/2);
-      result[mid] = nextSeed++;
-      result[lo+hi-mid] = nextSeed++;
-      place(lo, mid-1, nextSeed+2);
-      place(mid+1, hi, nextSeed);
-    }
-    // Simple seeding: interleave from top and bottom
-    let top=0, bot=size-1, seed=0;
-    const s = [];
-    for(let i=0;i<size;i++){
-      if(i%2===0) s.push(top++);
-      else        s.push(bot--);
-    }
-    s.forEach((slot,i)=>{ result[slot]=i; });
-    return result;
-  }
-  const r2SlotForSeed = seedOrder(halfP);
-  // r2SlotForSeed[i] = which R2 match slot seed i+1 should occupy
+  // R2 has halfP/2 matches (e.g. 10 players → 8 in R2 → 4 R2 matches)
+  // But wait: if n <= p/2, then r1Matches=0 and halfP=p/2, so R2 has p/4 matches.
+  // Actually simpler: total rounds = log2(p), and each round halves.
+  // R1 has r1Matches matches (play-in only).
+  // Then rounds 2..log2(p) are standard single-elim with p/2, p/4... players.
 
-  const newMatches = [];
+  const totalRounds = Math.log2(p); // e.g. p=16 → 4 rounds
+  const newMatches  = [];
 
-  // ── ROUND 1: play-in matches (lowest seeds only) ─────────
-  // Pairing: lowest two unseeded players play each other
-  // Seeds byeCount…n-1 (0-indexed) play in R1
-  // Pair them as: [byeCount vs n-1], [byeCount+1 vs n-2], ...
+  // ── ROUND 1: play-in matches ─────────────────────────────
+  // Pair lowest seeds against each other.
+  // Standard pairing: (byeCount+1 vs n), (byeCount+2 vs n-1), ...
+  // These winners will face the lowest bye seeds in R2.
   for (let i = 0; i < r1Matches; i++) {
-    const seedA = byeCount + i;
-    const seedB = n - 1 - i;
-    if (seedA >= seedB) break;
+    const seedA = byeCount + i;      // e.g. seed 7 (0-indexed: 6)
+    const seedB = n - 1 - i;        // e.g. seed 10 (0-indexed: 9)
     newMatches.push({
       id:genId(), round:1, matchIndex:i, slot:'W',
       entityA: playerIds[seedA],
       entityB: playerIds[seedB],
       scoreA:0, scoreB:0, status:'scheduled',
-      winnerId:null, loserId:null, date:'', venue:'',
-      _r2Slot: r2SlotForSeed[byeCount + i]  // which R2 slot this winner feeds
-    });
-  }
-
-  // ── ROUND 2 ──────────────────────────────────────────────
-  for (let i = 0; i < halfP; i++) {
-    newMatches.push({
-      id:genId(), round:2, matchIndex:i, slot:'W',
-      entityA:'TBD', entityB:'TBD',
-      scoreA:0, scoreB:0, status:'scheduled',
       winnerId:null, loserId:null, date:'', venue:''
     });
   }
 
-  // ── ROUNDS 3+ ────────────────────────────────────────────
-  let roundSize = halfP / 2;
-  let round     = 3;
-  while (roundSize >= 1) {
-    for (let i = 0; i < roundSize; i++) {
+  // ── ROUNDS 2 through totalRounds ─────────────────────────
+  // Round 2 is the "main" first round — has halfP players (p/2)
+  // Each subsequent round halves.
+  for (let r = 2; r <= totalRounds; r++) {
+    const matchCount = p / Math.pow(2, r);
+    for (let i = 0; i < matchCount; i++) {
       newMatches.push({
-        id:genId(), round, matchIndex:i, slot:'W',
+        id:genId(), round:r, matchIndex:i, slot:'W',
         entityA:'TBD', entityB:'TBD',
         scoreA:0, scoreB:0, status:'scheduled',
         winnerId:null, loserId:null, date:'', venue:''
       });
     }
-    if (roundSize === 1) break;
-    roundSize = Math.floor(roundSize / 2);
-    round++;
   }
 
-  // ── Place bye players directly into Round 2 ──────────────
-  // Bye seeds (0…byeCount-1) fill their assigned R2 slots
+  // ── Place players into Round 2 ────────────────────────────
+  // Standard bracket seeding for p/2 = halfP slots, p/4 = halfP/2 matches:
+  //
+  // For 10 players (p=16, halfP=8, 4 R2 matches):
+  //   R2 M0: Seed1 vs R1_winner_of_last_pair    (seed7 vs seed10 winner)
+  //   R2 M1: Seed2 vs R1_winner_of_second_pair  (seed8 vs seed9 winner)
+  //   R2 M2: Seed3 vs Seed6    (both byes, lower seeds)
+  //   R2 M3: Seed4 vs Seed5    (both byes)
+  //
+  // General: r1Matches pairs of lowest seeds play in R1.
+  // Their winners face the "middle" bye seeds in R2.
+  // Top bye seeds face each other in R2.
+
+  const r2Matches = newMatches.filter(m => m.slot==='W' && m.round===2)
+    .sort((a,b) => a.matchIndex - b.matchIndex);
+
+  // Standard bracket seeding positions for halfP players in halfP/2 matches:
+  // Seed positions in match order: [1,8], [4,5], [3,6], [2,7] for 8-player
+  // General: fill using the "standard seeding" pattern
+  //   seeds[0] and seeds[halfP-1] are in match 0 (top vs bottom)
+  //   seeds[halfP/2-1] and seeds[halfP/2] are in the middle match
+  const seedSlots = standardSeedSlots(halfP);
+  // seedSlots[i] = [matchIndex, 'A'|'B'] for seed i (0-indexed)
+
+  // Place bye players (seeds 0..byeCount-1)
   for (let s = 0; s < byeCount; s++) {
-    const r2Slot = r2SlotForSeed[s];
-    const r2M    = newMatches.find(m => m.slot==='W' && m.round===2 && m.matchIndex===r2Slot);
+    const [mIdx, side] = seedSlots[s];
+    const r2M = r2Matches[mIdx];
     if (!r2M) continue;
-    if (r2M.entityA === 'TBD') r2M.entityA = playerIds[s];
-    else if (r2M.entityB === 'TBD') r2M.entityB = playerIds[s];
+    if (side === 'A') r2M.entityA = playerIds[s];
+    else              r2M.entityB = playerIds[s];
   }
 
-  // ── Link R1 winners to their R2 slots ────────────────────
-  // R1 winners fill the B slot of the corresponding R2 match
-  // (A slot is already taken by the bye player they'll face)
-  const r1Ms = newMatches.filter(m => m.slot==='W' && m.round===1);
-  r1Ms.forEach((r1M, i) => {
-    const r2Slot = r2SlotForSeed[byeCount + i];
-    const r2M    = newMatches.find(m => m.slot==='W' && m.round===2 && m.matchIndex===r2Slot);
-    if (r2M) r1M._feedsR2 = r2M.id;  // store for advanceBracket
-  });
+  // Place R1 match winners into their R2 slots
+  // R1 winner i faces the bye player at slot (byeCount - 1 - i)
+  for (let i = 0; i < r1Matches; i++) {
+    const r1M = newMatches.find(m => m.slot==='W' && m.round===1 && m.matchIndex===i);
+    const byeSeedIdx = byeCount - 1 - i;  // last bye faces first R1 winner
+    const [mIdx, side] = seedSlots[byeSeedIdx + r1Matches];  // R1 winner slot
+
+    // Actually: the R1 winner occupies the OPPOSITE slot to the bye player
+    // they'll face. Find the R2 match that has byeSeedIdx's bye player.
+    const [byeMIdx] = seedSlots[byeSeedIdx];
+    const r2M = r2Matches[byeMIdx];
+    if (!r2M || !r1M) continue;
+
+    // Store the link so advanceBracket knows where to route this R1 winner
+    r1M._feedsR2    = r2M.id;
+    r1M._feedsSlot  = r2M.entityA === 'TBD' ? 'A' : 'B';
+  }
 
   // ── DOUBLE ELIM: losers bracket ──────────────────────────
   if (isDouble) {
-    const wbRounds   = Math.ceil(Math.log2(p));
+    const wbRounds   = totalRounds;
     const lbTotalRds = 2 * (wbRounds - 1);
     for (let r = 1; r <= lbTotalRds; r++) {
       const refOdd     = r % 2 === 1 ? r : r - 1;
@@ -6531,6 +6522,11 @@ async function commitSeedBracket(playerIds) {
     newMatches.push({ id:genId(), round:1, matchIndex:0, slot:'GF', entityA:'TBD', entityB:'TBD', scoreA:0, scoreB:0, status:'scheduled', winnerId:null, loserId:null, date:'', venue:'' });
     newMatches.push({ id:genId(), round:2, matchIndex:0, slot:'GF', entityA:'TBD', entityB:'TBD', scoreA:0, scoreB:0, status:'if_needed', winnerId:null, loserId:null, date:'', venue:'' });
   }
+
+  // ── Mark R2 matches that are fully determined as scheduled ─
+  newMatches.filter(m => m.slot==='W' && m.round===2).forEach(m => {
+    if (m.entityA !== 'TBD' && m.entityB !== 'TBD') m.status = 'scheduled';
+  });
 
   APP.bracketMatches = newMatches;
   autoAssignBracketDates(newMatches);
@@ -6544,6 +6540,60 @@ async function commitSeedBracket(playerIds) {
   toast(`Bracket seeded${byeMsg} ✓`);
   render();
   requestAnimationFrame(()=>{ try { drawBracketLines(); } catch(e){ console.warn('drawBracketLines:',e.message); } });
+}
+
+// Standard bracket seeding slot assignment for `n` players in `n/2` matches.
+// Returns array of [matchIndex, 'A'|'B'] for each seed (0-indexed).
+// Ensures seed 0 vs seed n-1 in the final if all top seeds win.
+function standardSeedSlots(n) {
+  // Build the seeding bracket recursively
+  // For n=8: positions are [0,7,3,4,1,6,2,5] → matches [0,0,1,1,2,2,3,3]
+  const slots = new Array(n);
+  function place(seedPairs, matchOffset) {
+    if (!seedPairs.length) return;
+    const nextPairs = [];
+    seedPairs.forEach(([a, b], i) => {
+      const mIdx = matchOffset + i;
+      slots[a] = [mIdx, 'A'];
+      slots[b] = [mIdx, 'B'];
+      // Next round: winners of adjacent pairs face each other
+    });
+    // Build next level pairs
+    for (let i = 0; i < seedPairs.length; i += 2) {
+      if (i + 1 < seedPairs.length) nextPairs.push([seedPairs[i][0], seedPairs[i+1][0]]);
+    }
+  }
+
+  // Initial pairs for n players using standard seeding
+  // For n=8: (0,7),(1,6),(2,5),(3,4) — but this is the simple version
+  // Standard: (0,n-1),(n/2-1,n/2),(n/4-1,3n/4),(n/4,3n/4-1)...
+  // Simplest correct approach: generate all n seeds and pair using
+  // the "fold" pattern:
+  const order = buildSeedOrder(n);
+  for (let i = 0; i < n; i += 2) {
+    const mIdx = Math.floor(i / 2);
+    slots[order[i]]   = [mIdx, 'A'];
+    slots[order[i+1]] = [mIdx, 'B'];
+  }
+  return slots;
+}
+
+// Build seed order for a bracket of size n using standard folding
+// Returns array of seed indices in bracket order (top to bottom)
+function buildSeedOrder(n) {
+  if (n === 2) return [0, 1];
+  if (n === 1) return [0];
+  const half = n / 2;
+  const top  = buildSeedOrder(half);
+  // Pair each top-half seed with their standard opponent from the bottom half
+  // Standard: seed i faces seed (n-1-i) in the final if all win
+  // So the ordering interleaves top and bottom halves
+  const result = [];
+  for (let i = 0; i < half; i++) {
+    result.push(top[i]);                    // top half seed
+    result.push(n - 1 - top[i]);           // their paired bottom seed
+  }
+  return result;
 }
 
 
@@ -6563,23 +6613,30 @@ function advanceBracket(completedMatch) {
 
   // ── Winners bracket progression ──
   if (slot === 'W') {
-    // For R1 play-in matches, use _feedsR2 to find the correct R2 match
-    // (bye brackets don't use simple floor(matchIndex/2) routing)
-    const feedsR2 = completedMatch._feedsR2;
+    // R1 play-in matches use _feedsR2/_feedsSlot for precise R2 slot routing
+    const feedsR2   = completedMatch._feedsR2;
+    const feedsSlot = completedMatch._feedsSlot;
     let nextWB;
     if (round === 1 && feedsR2) {
       nextWB = APP.bracketMatches.find(m => m.id === feedsR2);
+      if (nextWB) {
+        if (feedsSlot === 'A' && nextWB.entityA === 'TBD')      nextWB.entityA = winnerId;
+        else if (feedsSlot === 'B' && nextWB.entityB === 'TBD') nextWB.entityB = winnerId;
+        else if (nextWB.entityA === 'TBD')                       nextWB.entityA = winnerId;
+        else if (nextWB.entityB === 'TBD')                       nextWB.entityB = winnerId;
+        if (nextWB.entityA !== 'TBD' && nextWB.entityB !== 'TBD') nextWB.status = 'scheduled';
+      }
     } else {
       const nextRound    = round + 1;
       const nextMatchIdx = Math.floor(matchIndex / 2);
       nextWB = APP.bracketMatches.find(m => m.slot==='W' && m.round===nextRound && m.matchIndex===nextMatchIdx);
+      if (nextWB) {
+        if (nextWB.entityA === 'TBD')      nextWB.entityA = winnerId;
+        else if (nextWB.entityB === 'TBD') nextWB.entityB = winnerId;
+        if (nextWB.entityA !== 'TBD' && nextWB.entityB !== 'TBD') nextWB.status = 'scheduled';
+      }
     }
-    if (nextWB) {
-      if (nextWB.entityA==='TBD') nextWB.entityA = winnerId;
-      else if (nextWB.entityB==='TBD') nextWB.entityB = winnerId;
-      if (nextWB.entityA!=='TBD' && nextWB.entityB!=='TBD') nextWB.status = 'scheduled';
-    } else if (isDouble) {
-      // WB final winner → GF entityA (the side with bracket advantage)
+    if (!nextWB && isDouble) {
       const gf = APP.bracketMatches.find(m => m.slot==='GF');
       if (gf && gf.entityA==='TBD') {
         gf.entityA = winnerId;
