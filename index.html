@@ -2597,14 +2597,20 @@ async function loadLeagueData(id) {
       .sort((a,b)=>(b.score||0)-(a.score||0));
 
     const unsub = base.collection('matches')
-      .where('status','in',['live','scheduled'])
       .onSnapshot(snap => {
+        // Listen to ALL match changes so completed matches update correctly
         snap.docChanges().forEach(ch => {
           const data = {id:ch.doc.id,...ch.doc.data()};
-          const idx = APP.matches.findIndex(m=>m.id===ch.doc.id);
-          if (ch.type==='modified' && idx>-1) APP.matches[idx]=data;
-          else if (ch.type==='added' && idx===-1) APP.matches.push(data);
-          else if (ch.type==='removed' && idx>-1) APP.matches.splice(idx,1);
+          const idx  = APP.matches.findIndex(m=>m.id===ch.doc.id);
+          if (ch.type==='removed') {
+            // Only remove if explicitly deleted — not just status change
+            // (Firestore 'removed' fires when a doc leaves a filtered query,
+            // which happens when a match becomes 'completed' and was in a
+            // 'live'|'scheduled' filter — DON'T delete it from APP.matches)
+            return;
+          }
+          if (idx > -1) APP.matches[idx] = data;      // update in place
+          else          APP.matches.push(data);         // new match added
         });
         if (APP.view==='league') render();
       });
@@ -7541,6 +7547,7 @@ async function saveTeamScore(matchId) {
   saveActiveToLocal();
   closeModal();
   toast('Score saved ✓');
+  APP.tab = 'dashboard';
   render();
 }
 
@@ -7627,10 +7634,11 @@ async function saveScore(matchId){
 
   await persistInLeague('matches', matchId, m);
   if (m.status === 'completed') await extractAndSaveBreaks(m);
-  saveActiveToLocal();  // ensure leaderboard reads updated localStorage
+  saveActiveToLocal();
   closeModal();
   toast('Score saved ✓');
-  // Re-render immediately — if on fixtures tab, stay there; otherwise update
+  // Navigate to dashboard so leaderboard reflects the update immediately
+  APP.tab = 'dashboard';
   render();
 }
 
