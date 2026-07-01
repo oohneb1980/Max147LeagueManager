@@ -6251,12 +6251,16 @@ async function saveBracketScore(matchId) {
 function openSeedBracket() {
   if (!canEditCompetition(APP.activeLeagueId)) { toast("You don't have permission"); return; }
   const players = APP.players;
-  if (players.length < 2) {
-    openModal('No players yet',
+  const n = players.length;
+  const VALID = [2,4,8,16,32,64,128];
+  const isPow2 = VALID.includes(n);
+
+  if (n < 2) {
+    openModal('Not enough players',
       `<div style="text-align:center;padding:16px 0">
         <div style="font-size:40px;margin-bottom:12px">👥</div>
-        <div style="font-size:14px;color:var(--ink-2);line-height:1.6;margin-bottom:4px">
-          Add at least 2 players in the <strong>Participants</strong> tab before seeding the bracket.
+        <div style="font-size:14px;color:var(--ink-2);line-height:1.6">
+          Add at least 2 players in the <strong>Participants</strong> tab first.
         </div>
       </div>`,
       `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
@@ -6265,40 +6269,60 @@ function openSeedBracket() {
     return;
   }
 
-  // Find smallest power of 2 >= player count (fewest BYEs possible)
-  // 10 players → 16 slots would give 6 BYEs — instead we use 2^ceil(log2(n))
-  const n = players.length;
-  let sz = 2;
-  while (sz < n) sz *= 2;  // e.g. 10 players → sz = 16... still too many
-  // Actually for 10 players the bracket MUST be a power of 2 for the structure to work.
-  // But we minimise dummy matches: 10→16 gives 6 BYEs. We auto-advance BYE matches
-  // so they're invisible — only 10 actual players ever play.
-  const shuffled = [...players].sort(() => Math.random() - 0.5);
-  // Pad with BYEs
-  while (shuffled.length < sz) shuffled.push({id:'BYE', name:'Bye'});
+  if (!isPow2) {
+    // Find nearest valid sizes
+    const lower = VALID.filter(s => s < n).pop();
+    const upper = VALID.find(s => s > n);
+    const need  = upper - n;
+    const remove = n - lower;
+    openModal('Player count must be a power of 2',
+      `<div style="text-align:center;padding:16px 0">
+        <div style="font-size:40px;margin-bottom:12px">⚠️</div>
+        <div style="font-size:15px;font-weight:600;color:var(--ink);margin-bottom:10px">
+          You have <strong>${n} players</strong>
+        </div>
+        <div style="font-size:13px;color:var(--ink-2);line-height:1.8;margin-bottom:16px">
+          Elimination brackets require exactly <strong>2, 4, 8, 16, 32, 64</strong> or <strong>128</strong> players
+          so every round halves cleanly with no walkovers.
+        </div>
+        <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+          ${lower ? `<div style="padding:10px 16px;background:var(--bg-raised);border-radius:var(--r);font-size:13px">
+            <div style="color:var(--amber);font-weight:600">Remove ${remove} player${remove>1?'s':''}</div>
+            <div style="color:var(--ink-3)">to get ${lower} players</div>
+          </div>` : ''}
+          ${upper ? `<div style="padding:10px 16px;background:var(--bg-raised);border-radius:var(--r);font-size:13px">
+            <div style="color:var(--green);font-weight:600">Add ${need} more player${need>1?'s':''}</div>
+            <div style="color:var(--ink-3)">to get ${upper} players</div>
+          </div>` : ''}
+        </div>
+      </div>`,
+      `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+       <button class="btn btn-primary" onclick="closeModal();nav('participants')">Manage Players →</button>`
+    );
+    return;
+  }
 
+  // Valid power-of-2 count — show seeding preview
+  const shuffled = [...players].sort(() => Math.random() - 0.5);
   window._pendingSeeds = shuffled.map(p => p.id);
 
-  const byeCount = shuffled.filter(p => p.id === 'BYE').length;
   openModal('Seed bracket',
-    `<div class="alert alert-info" style="margin-bottom:14px">
-      <strong>${players.length}</strong> players → <strong>${sz}</strong>-player bracket
-      ${byeCount ? `(${byeCount} bye${byeCount>1?'s':''})` : '(no byes needed)'}.
+    `<div style="margin-bottom:14px;padding:10px 14px;background:var(--bg-raised);border-radius:var(--r);font-size:13px;color:var(--ink-2)">
+      <strong style="color:var(--ink)">${n} players</strong> — ${Math.log2(n)} rounds to the final.
       Players are randomly seeded. Reseed as many times as you like before locking.
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
-      ${shuffled.map((p,i) => `<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;
-          background:var(--bg-raised);border-radius:var(--r);font-size:13px">
-        <span style="color:var(--ink-3);font-family:monospace;font-size:11px;min-width:20px">${i+1}</span>
-        <span style="font-weight:${p.id==='BYE'?400:500};color:${p.id==='BYE'?'var(--ink-3)':'var(--ink)'}">
-          ${esc(p.name)}
-        </span>
-      </div>`).join('')}
+      ${shuffled.map((p,i) => `
+        <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;
+            background:var(--bg-raised);border-radius:var(--r);font-size:13px">
+          <span style="color:var(--ink-3);font-family:monospace;font-size:11px;min-width:20px">${i+1}</span>
+          <span style="font-weight:500;color:var(--ink)">${esc(p.name)}</span>
+        </div>`).join('')}
     </div>`,
     `<button class="btn btn-ghost" onclick="openSeedBracket()">🎲 Reseed</button>
      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
      <button class="btn btn-primary" onclick="commitSeedBracket(window._pendingSeeds)">
-       Lock &amp; generate matches
+       Lock &amp; generate bracket
      </button>`
   );
 }
@@ -6427,14 +6451,19 @@ async function commitSeedBracket(playerIds) {
   const isDouble = ct === 'double_elim';
   const n        = playerIds.length;
 
-  // ── Find bracket size: next power of 2 >= n ──────────────
-  let p = 1; while (p < n) p *= 2;
+  // ── Guard: must be exact power of 2 ──────────────────────
+  const VALID = [2,4,8,16,32,64,128];
+  if (!VALID.includes(n)) {
+    toast(`Need exactly 2, 4, 8, 16, 32, 64 or 128 players (have ${n})`);
+    return;
+  }
 
-  // ── Standard seeding order ───────────────────────────────
-  // singleElimSeeds(p) returns an array of length p where
-  // singleElimSeeds[slot] = 1-indexed seed number.
-  // Standard pattern ensures seed1 vs seed2 in the Final
-  // if all top seeds win every match.
+  const totalRounds = Math.log2(n);  // e.g. 8 players → 3 rounds
+  const newMatches  = [];
+
+  // ── Standard seeding pattern ──────────────────────────────
+  // singleElimSeeds[slot] = 1-indexed seed for that R1 slot.
+  // Guarantees seed1 vs seed2 in the Final if all top seeds win.
   function singleElimSeeds(size) {
     if (size === 1) return [1];
     const prev = singleElimSeeds(size / 2);
@@ -6445,81 +6474,46 @@ async function commitSeedBracket(playerIds) {
     }
     return out;
   }
+  const seeds    = singleElimSeeds(n);
+  const getPlayer = slot => playerIds[seeds[slot] - 1];
 
-  const seeds = singleElimSeeds(p);
-  // seeds[slot] = 1-indexed seed. Map to player: playerIds[seed-1], or 'BYE' if seed > n.
-  const byPlayer = slot => seeds[slot] <= n ? playerIds[seeds[slot] - 1] : 'BYE';
-
-  // ── Generate ALL rounds as a full p-player bracket ───────
-  // Round 1: p/2 matches  (e.g. p=16 → 8 matches)
-  // Round 2: p/4 matches  (e.g. 4 matches = QF)
-  // Round 3: p/8 matches  (SF)
-  // Round 4: 1 match      (Final)
-  const totalRounds = Math.log2(p);
-  const newMatches  = [];
-
+  // ── WINNERS BRACKET ───────────────────────────────────────
   for (let r = 1; r <= totalRounds; r++) {
-    const matchCount = p / Math.pow(2, r);
+    const matchCount = n / Math.pow(2, r);
     for (let i = 0; i < matchCount; i++) {
-      // For R1, fill entity slots from seeding; later rounds start TBD
-      const entityA = r === 1 ? byPlayer(2 * i)     : 'TBD';
-      const entityB = r === 1 ? byPlayer(2 * i + 1) : 'TBD';
       const m = {
         id:genId(), round:r, matchIndex:i, slot:'W',
-        entityA, entityB,
-        scoreA:0, scoreB:0,
-        status:'scheduled',
+        entityA: r === 1 ? getPlayer(2 * i)     : 'TBD',
+        entityB: r === 1 ? getPlayer(2 * i + 1) : 'TBD',
+        scoreA:0, scoreB:0, status:'scheduled',
         winnerId:null, loserId:null, date:'', venue:''
       };
-      // Auto-complete BYE matches immediately
-      if (r === 1 && (entityA === 'BYE' || entityB === 'BYE')) {
-        m.status    = 'completed';
-        m.winnerId  = entityA === 'BYE' ? entityB : entityA;
-        m.loserId   = entityA === 'BYE' ? entityA : entityB;
-      }
       newMatches.push(m);
     }
   }
 
-  // ── Double elim: losers bracket + GF ─────────────────────
+  // ── LOSERS BRACKET (double elim only) ─────────────────────
   if (isDouble) {
-    // The effective bracket size from WB R2 onwards is p/2.
-    // BYEs only affect WB R1 — from R2 the bracket is a clean (p/2)-player double elim.
-    // e.g. 12 players → p=16, effP=8 → use 8-player double elim LB structure.
-    //
-    // 8-player double elim LB:  R1:2, R2:2, R3:1, R4:1  (4 LB rounds)
-    // 16-player double elim LB: R1:4, R2:4, R3:2, R4:2, R5:1, R6:1  (6 LB rounds)
-    // Formula for effP-player LB round r:
-    //   matchCount = effP / 2^(ceil(r/2) + 1)
-    // realR1 = actual non-BYE R1 matches
-    // LB R1 size = ceil(realR1/2) — real losers pair up
-    // LB R2+ uses injection formula: survivors + WB losers per major round
-    const realR1   = n - p / 2;
-    const lbR1     = Math.max(1, Math.ceil(realR1 / 2));
+    // Standard double elim for exactly n players (power of 2):
+    //   LB has 2*(totalRounds-1) rounds
+    //   Odd  LB rounds (minor): LB survivors play each other
+    //   Even LB rounds (major): LB survivors + WB losers injected
+    //   Match count = n / 2^(ceil(r/2) + 1)
     const lbRounds = 2 * (totalRounds - 1);
-
-    let survivors = lbR1;
     for (let r = 1; r <= lbRounds; r++) {
-      let matchCount;
-      if (r === 1) {
-        matchCount = lbR1;
-      } else if (r % 2 === 1) {
-        // Minor round: survivors halve
-        matchCount = Math.max(1, Math.ceil(survivors / 2));
-      } else {
-        // Major round: survivors + WB injection from corresponding WB round
-        const wbRound  = r / 2 + 1;  // LB R2←WB R2, LB R4←WB R3, LB R6←WB R4
-        const wbLosers = p / Math.pow(2, wbRound);
-        matchCount = Math.max(1, Math.ceil((survivors + wbLosers) / 2));
-      }
-      survivors = matchCount;
+      const refOdd     = r % 2 === 1 ? r : r - 1;
+      const matchCount = Math.max(1, n / Math.pow(2, Math.ceil(refOdd / 2) + 1));
       for (let i = 0; i < matchCount; i++) {
-        newMatches.push({ id:genId(), round:r, matchIndex:i, slot:'L',
-          entityA:'TBD', entityB:'TBD', scoreA:0, scoreB:0,
-          status:'scheduled', winnerId:null, loserId:null, date:'', venue:'' });
+        newMatches.push({
+          id:genId(), round:r, matchIndex:i, slot:'L',
+          entityA:'TBD', entityB:'TBD',
+          scoreA:0, scoreB:0, status:'scheduled',
+          winnerId:null, loserId:null, date:'', venue:''
+        });
       }
     }
 
+    // Grand Final
     newMatches.push({ id:genId(), round:1, matchIndex:0, slot:'GF',
       entityA:'TBD', entityB:'TBD', scoreA:0, scoreB:0,
       status:'scheduled', winnerId:null, loserId:null, date:'', venue:'' });
@@ -6528,26 +6522,12 @@ async function commitSeedBracket(playerIds) {
       status:'if_needed', winnerId:null, loserId:null, date:'', venue:'' });
   }
 
-
-  // ── Auto-advance BYE winners into next round ─────────────
-  // Process R1 completed (BYE) matches in order so winners
-  // cascade into R2 slots correctly
   APP.bracketMatches = newMatches;
-  newMatches
-    .filter(m => m.round === 1 && m.status === 'completed')
-    .sort((a, b) => a.matchIndex - b.matchIndex)
-    .forEach(m => advanceBracket(m));
-
   autoAssignBracketDates(newMatches);
   await Promise.all(newMatches.map(m => persistInLeague('bracketMatches', m.id, m)));
   saveActiveToLocal();
   closeModal();
-
-  const byeCount = p - n;
-  const byeMsg   = byeCount > 0
-    ? ` — ${byeCount} top seed${byeCount !== 1 ? 's' : ''} get a bye`
-    : '';
-  toast(`Bracket seeded ✓${byeMsg}`);
+  toast(`Bracket seeded ✓  — ${totalRounds} rounds, ${n - 1} matches total`);
   render();
   requestAnimationFrame(() => {
     try { drawBracketLines(); } catch(e) { console.warn('drawBracketLines:', e.message); }
@@ -6595,31 +6575,27 @@ function advanceBracket(completedMatch) {
     //   WB R1 → LB R1, WB R2 → LB R3, WB R3 → LB R5...
     // But with byes: WB R1 real losers still → LB R1
     // BYE losers are ignored entirely
-    // Route loser to LB — skip BYE losers (not real players)
-    if (isDouble && loserId && loserId !== 'BYE') {
-      // WB R1 real losers → LB R1 (minor round — losers pair up)
-      // WB Rr (r>1)       → LB R(2*(r-1)) (major round — injection)
+    // Route loser to LB — standard power-of-2 formula:
+    // WB R1 → LB R1, WB R2 → LB R2, WB R3 → LB R4, WB R4 → LB R6
+    // i.e. WB Rr → LB R(2*(r-1)) for r>1, LB R1 for r=1
+    if (isDouble && loserId) {
       const targetLBRound = round === 1 ? 1 : 2 * (round - 1);
       const lbSlots = APP.bracketMatches
         .filter(m => m.slot === 'L' && m.round === targetLBRound)
         .sort((a, b) => a.matchIndex - b.matchIndex);
 
       if (round === 1) {
-        // Find this match's position among REAL (non-BYE) R1 matches only
-        const realR1Matches = APP.bracketMatches
-          .filter(m => m.slot==='W' && m.round===1 && m.entityA!=='BYE' && m.entityB!=='BYE')
-          .sort((a,b) => a.matchIndex - b.matchIndex);
-        const realIdx = realR1Matches.findIndex(m => m.id === completedMatch.id);
-        const lbIdx   = Math.floor(realIdx / 2);
-        const lbM     = lbSlots.find(m => m.matchIndex === lbIdx);
+        // WB R1: pairs of adjacent losers fill LB R1
+        // matchIndex 0,1 → LB R1 M0; 2,3 → LB R1 M1; etc.
+        const lbIdx = Math.floor(matchIndex / 2);
+        const lbM   = lbSlots.find(m => m.matchIndex === lbIdx);
         if (lbM) {
           if (lbM.entityA === 'TBD')      lbM.entityA = loserId;
           else if (lbM.entityB === 'TBD') lbM.entityB = loserId;
           if (lbM.entityA !== 'TBD' && lbM.entityB !== 'TBD') lbM.status = 'scheduled';
         }
       } else {
-        // WB R2+: loser goes to entityB of corresponding LB major round match
-        // Use matchIndex to target the right slot when multiple LB matches exist
+        // WB R2+: one loser per LB major round match
         const lbM = lbSlots.find(m => m.matchIndex === matchIndex && m.entityB === 'TBD')
                  || lbSlots.find(m => m.entityB === 'TBD')
                  || lbSlots.find(m => m.entityA === 'TBD')
