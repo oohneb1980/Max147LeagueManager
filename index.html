@@ -2585,47 +2585,54 @@ async function loadLeagues() {
 }
 
 async function loadLeagueData(id) {
-  loadLeagueDataLocal(id); // immediately populate from seed/cache
-  if (!db || !fbConnected) return;
+  loadLeagueDataLocal(id); // immediately populate from cache while Firestore loads
+  if (!db) return;
   liveUnsubs.forEach(u=>u()); liveUnsubs=[];
   try {
     const base = db.collection(LEAGUES_COL).doc(id);
-    // Don't use orderBy('date') — requires Firestore index and fails for
-    // matches without a date field. Sort client-side instead.
-    const [pSnap, tSnap, mSnap, bSnap] = await Promise.all([
+    // Fetch all collections in parallel — no orderBy to avoid index requirement
+    const [pSnap, tSnap, mSnap, bSnap, bmSnap, grpSnap, gmSnap, koSnap] = await Promise.all([
       base.collection('players').get(),
       base.collection('teams').get(),
       base.collection('matches').get(),
-      base.collection('breaks').get()
+      base.collection('breaks').get(),
+      base.collection('bracketMatches').get(),
+      base.collection('groups').get(),
+      base.collection('groupMatches').get(),
+      base.collection('knockoutMatches').get(),
     ]);
-    // Always overwrite — even empty snapshots mean "no data" (e.g. after reset)
-    APP.players = pSnap.docs.map(d=>({id:d.id,...d.data()}));
-    APP.teams   = tSnap.docs.map(d=>({id:d.id,...d.data()}));
-    APP.matches = mSnap.docs.map(d=>({id:d.id,...d.data()}))
-      .sort((a,b)=>(a.date||'').localeCompare(b.date||''));
-    APP.breaks  = bSnap.docs.map(d=>({id:d.id,...d.data()}))
-      .sort((a,b)=>(b.score||0)-(a.score||0));
 
-    const unsub = base.collection('matches')
-      .onSnapshot(snap => {
-        // Listen to ALL match changes so completed matches update correctly
-        snap.docChanges().forEach(ch => {
-          const data = {id:ch.doc.id,...ch.doc.data()};
-          const idx  = APP.matches.findIndex(m=>m.id===ch.doc.id);
-          if (ch.type==='removed') {
-            // Only remove if explicitly deleted — not just status change
-            // (Firestore 'removed' fires when a doc leaves a filtered query,
-            // which happens when a match becomes 'completed' and was in a
-            // 'live'|'scheduled' filter — DON'T delete it from APP.matches)
-            return;
-          }
-          if (idx > -1) APP.matches[idx] = data;      // update in place
-          else          APP.matches.push(data);         // new match added
-        });
-        if (APP.view==='league') render();
+    APP.players        = pSnap.docs.map(d=>({id:d.id,...d.data()}));
+    APP.teams          = tSnap.docs.map(d=>({id:d.id,...d.data()}));
+    APP.matches        = mSnap.docs.map(d=>({id:d.id,...d.data()}))
+                           .sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+    APP.breaks         = bSnap.docs.map(d=>({id:d.id,...d.data()}))
+                           .sort((a,b)=>(b.score||0)-(a.score||0));
+    APP.bracketMatches = bmSnap.docs.map(d=>({id:d.id,...d.data()}));
+    APP.groups         = grpSnap.docs.map(d=>({id:d.id,...d.data()}));
+    APP.groupMatches   = gmSnap.docs.map(d=>({id:d.id,...d.data()}))
+                           .sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+    APP.knockoutMatches = koSnap.docs.map(d=>({id:d.id,...d.data()}));
+
+    saveActiveToLocal(); // update cache with fresh Firestore data
+
+    // Live listener for regular league matches (status changes)
+    const unsub = base.collection('matches').onSnapshot(snap => {
+      snap.docChanges().forEach(ch => {
+        if (ch.type === 'removed') return; // don't delete on status change
+        const data = {id:ch.doc.id,...ch.doc.data()};
+        const idx  = APP.matches.findIndex(m=>m.id===ch.doc.id);
+        if (idx > -1) APP.matches[idx] = data;
+        else          APP.matches.push(data);
       });
+      if (APP.view==='league') render();
+    });
     liveUnsubs.push(unsub);
-  } catch(e) { console.warn('Firestore league data load error',e); }
+
+    // Re-render after full load so names resolve correctly
+    if (APP.view === 'league') render();
+
+  } catch(e) { console.warn('Firestore league data load error:', e.code, e.message); }
 }
 
 // Persist a league meta doc to localStorage + Firestore
