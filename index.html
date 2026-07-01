@@ -6483,50 +6483,37 @@ async function commitSeedBracket(playerIds) {
 
   // ── Double elim: losers bracket + GF ─────────────────────
   if (isDouble) {
-    // LB sizing must account for BYEs — real player count drives LB size, not p.
-    // realR1 = number of real R1 matches (non-BYE)
-    const halfP   = p / 2;
-    const realR1  = n - halfP;           // e.g. 12 players → 4 real R1 matches
+    // The effective bracket size from WB R2 onwards is p/2.
+    // BYEs only affect WB R1 — from R2 the bracket is a clean (p/2)-player double elim.
+    // e.g. 12 players → p=16, effP=8 → use 8-player double elim LB structure.
+    //
+    // 8-player double elim LB:  R1:2, R2:2, R3:1, R4:1  (4 LB rounds)
+    // 16-player double elim LB: R1:4, R2:4, R3:2, R4:2, R5:1, R6:1  (6 LB rounds)
+    // Formula for effP-player LB round r:
+    //   matchCount = effP / 2^(ceil(r/2) + 1)
+    // realR1 = actual non-BYE R1 matches
+    // LB R1 size = ceil(realR1/2) — real losers pair up
+    // LB R2+ uses injection formula: survivors + WB losers per major round
+    const realR1   = n - p / 2;
+    const lbR1     = Math.max(1, Math.ceil(realR1 / 2));
     const lbRounds = 2 * (totalRounds - 1);
 
-    // Build LB round by round with correct match counts:
-    //   LB R1 (minor): ceil(realR1/2) matches — real R1 losers pair up
-    //   LB R2 (major): ceil((LB-R1-winners + WB-R2-losers) / 2) matches
-    //   LB R3 (minor): ceil(LB-R2-winners / 2) matches
-    //   LB R4 (major): ceil((LB-R3-winners + WB-R3-losers) / 2) matches
-    //   ... each major round injects new WB losers; minor rounds halve survivors
-
-    let lbPlayers = realR1; // starts with real R1 losers
-    const lbMatchCounts = [];
-
+    let survivors = lbR1;
     for (let r = 1; r <= lbRounds; r++) {
-      const isMinor = r % 2 === 1; // odd = minor (LB survivors play each other)
-      const isFirst = r === 1;
-
-      let matches;
-      if (isFirst) {
-        // LB R1: real R1 losers pair up
-        matches = Math.max(1, Math.ceil(realR1 / 2));
-        lbPlayers = matches; // survivors after R1
-      } else if (isMinor) {
-        // Minor round: LB survivors play each other (no WB injection)
-        matches = Math.max(1, Math.ceil(lbPlayers / 2));
-        lbPlayers = matches;
+      let matchCount;
+      if (r === 1) {
+        matchCount = lbR1;
+      } else if (r % 2 === 1) {
+        // Minor round: survivors halve
+        matchCount = Math.max(1, Math.ceil(survivors / 2));
       } else {
-        // Major round: LB survivors + WB losers injected
-        // WB round that feeds this LB major round:
-        //   LB R2 ← WB R2 losers (p/4 matches worth)
-        //   LB R4 ← WB R3 losers (p/8 matches worth)
-        //   LB R6 ← WB R4 losers (p/16 matches worth)
-        const wbRoundIdx = r / 2 + 1; // WB round that feeds this LB major
-        const wbLosers   = p / Math.pow(2, wbRoundIdx); // matches in that WB round
-        const totalIn    = lbPlayers + wbLosers;
-        matches = Math.max(1, Math.ceil(totalIn / 2));
-        lbPlayers = matches;
+        // Major round: survivors + WB injection from corresponding WB round
+        const wbRound  = r / 2 + 1;  // LB R2←WB R2, LB R4←WB R3, LB R6←WB R4
+        const wbLosers = p / Math.pow(2, wbRound);
+        matchCount = Math.max(1, Math.ceil((survivors + wbLosers) / 2));
       }
-
-      lbMatchCounts.push(matches);
-      for (let i = 0; i < matches; i++) {
+      survivors = matchCount;
+      for (let i = 0; i < matchCount; i++) {
         newMatches.push({ id:genId(), round:r, matchIndex:i, slot:'L',
           entityA:'TBD', entityB:'TBD', scoreA:0, scoreB:0,
           status:'scheduled', winnerId:null, loserId:null, date:'', venue:'' });
@@ -6540,6 +6527,7 @@ async function commitSeedBracket(playerIds) {
       entityA:'TBD', entityB:'TBD', scoreA:0, scoreB:0,
       status:'if_needed', winnerId:null, loserId:null, date:'', venue:'' });
   }
+
 
   // ── Auto-advance BYE winners into next round ─────────────
   // Process R1 completed (BYE) matches in order so winners
@@ -6607,32 +6595,35 @@ function advanceBracket(completedMatch) {
     //   WB R1 → LB R1, WB R2 → LB R3, WB R3 → LB R5...
     // But with byes: WB R1 real losers still → LB R1
     // BYE losers are ignored entirely
+    // Route loser to LB — skip BYE losers (not real players)
     if (isDouble && loserId && loserId !== 'BYE') {
+      // WB R1 real losers → LB R1 (minor round — losers pair up)
+      // WB Rr (r>1)       → LB R(2*(r-1)) (major round — injection)
       const targetLBRound = round === 1 ? 1 : 2 * (round - 1);
-      const lbRound = APP.bracketMatches
+      const lbSlots = APP.bracketMatches
         .filter(m => m.slot === 'L' && m.round === targetLBRound)
         .sort((a, b) => a.matchIndex - b.matchIndex);
 
       if (round === 1) {
-        // Pair R1 real losers into LB R1 matches
-        // Each pair of adjacent R1 matches feeds one LB R1 match
-        // But skip BYE matches — count only real R1 matches
-        const realR1 = APP.bracketMatches
+        // Find this match's position among REAL (non-BYE) R1 matches only
+        const realR1Matches = APP.bracketMatches
           .filter(m => m.slot==='W' && m.round===1 && m.entityA!=='BYE' && m.entityB!=='BYE')
-          .sort((a,b)=>a.matchIndex-b.matchIndex);
-        const realIdx = realR1.findIndex(m => m.id === completedMatch.id);
+          .sort((a,b) => a.matchIndex - b.matchIndex);
+        const realIdx = realR1Matches.findIndex(m => m.id === completedMatch.id);
         const lbIdx   = Math.floor(realIdx / 2);
-        const lbM     = lbRound.find(m => m.matchIndex === lbIdx);
+        const lbM     = lbSlots.find(m => m.matchIndex === lbIdx);
         if (lbM) {
           if (lbM.entityA === 'TBD')      lbM.entityA = loserId;
           else if (lbM.entityB === 'TBD') lbM.entityB = loserId;
           if (lbM.entityA !== 'TBD' && lbM.entityB !== 'TBD') lbM.status = 'scheduled';
         }
       } else {
-        // WB R2+: one loser per LB major round match
-        const lbM = lbRound.find(m => m.matchIndex === matchIndex && m.entityB === 'TBD')
-                 || lbRound.find(m => m.entityB === 'TBD')
-                 || lbRound[0];
+        // WB R2+: loser goes to entityB of corresponding LB major round match
+        // Use matchIndex to target the right slot when multiple LB matches exist
+        const lbM = lbSlots.find(m => m.matchIndex === matchIndex && m.entityB === 'TBD')
+                 || lbSlots.find(m => m.entityB === 'TBD')
+                 || lbSlots.find(m => m.entityA === 'TBD')
+                 || lbSlots[0];
         if (lbM) {
           if (lbM.entityB === 'TBD')      lbM.entityB = loserId;
           else if (lbM.entityA === 'TBD') lbM.entityA = loserId;
