@@ -6157,9 +6157,16 @@ async function saveEditBracketFixture(matchId) {
 }
 
 
+// Helper: find a bracket match in either bracketMatches or knockoutMatches
+function findBracketMatch(matchId) {
+  return APP.bracketMatches.find(x=>x.id===matchId)
+      || APP.knockoutMatches.find(x=>x.id===matchId)
+      || null;
+}
+
 function openBracketScoreEntry(matchId) {
-  const m = APP.bracketMatches.find(x=>x.id===matchId);
-  if (!m) return;
+  const m = findBracketMatch(matchId);
+  if (!m) { console.warn('openBracketScoreEntry: match not found', matchId); return; }
   const aName = getBracketFullName(m.entityA);
   const bName = getBracketFullName(m.entityB);
   const isDouble = APP.config.competitionType === 'double_elim';
@@ -6203,49 +6210,60 @@ function openBracketScoreEntry(matchId) {
 }
 
 async function saveBracketScore(matchId) {
-  const m = APP.bracketMatches.find(x=>x.id===matchId);
+  const m = findBracketMatch(matchId);
   if (!m) return;
+
+  // Determine which collection this match belongs to
+  const isGroupKO = !!(m.isGroupKO || APP.knockoutMatches.find(x=>x.id===matchId));
+  const col = isGroupKO ? 'knockoutMatches' : 'bracketMatches';
+  const matchArray = isGroupKO ? APP.knockoutMatches : APP.bracketMatches;
+
   const sa = +document.getElementById('bs-sa').value;
   const sb = +document.getElementById('bs-sb').value;
   m.scoreA = sa; m.scoreB = sb;
   m.highBreakA = +document.getElementById('bs-hba').value||0;
   m.highBreakB = +document.getElementById('bs-hbb').value||0;
   m.status = document.getElementById('bs-status').value;
-  m.date = document.getElementById('bs-date').value;
-  m.venue = document.getElementById('bs-venue').value.trim();
+  m.date   = document.getElementById('bs-date').value;
+  m.venue  = document.getElementById('bs-venue').value.trim();
 
-  if (m.status==='completed') {
-    if (sa > sb) { m.winnerId = m.entityA; m.loserId = m.entityB; }
+  // Auto-complete when winner is clear
+  const needed = Math.ceil((APP.config.bestOf||7)/2);
+  if (sa >= needed || sb >= needed) m.status = 'completed';
+
+  if (m.status === 'completed') {
+    if (sa > sb)      { m.winnerId = m.entityA; m.loserId = m.entityB; }
     else if (sb > sa) { m.winnerId = m.entityB; m.loserId = m.entityA; }
-    else { m.winnerId = null; m.loserId = null; } // draw — shouldn't happen in KO
-    // Auto-advance winner to next round
+    else              { m.winnerId = null; m.loserId = null; }
+
+    // Advance winner — swap bracketMatches to the correct array temporarily
+    const savedBM = APP.bracketMatches;
+    APP.bracketMatches = matchArray;
     advanceBracket(m);
+    APP.bracketMatches = savedBM;
+    if (isGroupKO) APP.knockoutMatches = matchArray;
+
     // Log high breaks
-    if (m.highBreakA>=(APP.config.highBreakThreshold??50)) {
-      const p = APP.players.find(p=>p.id===m.entityA);
-      if (p && !APP.breaks.find(b=>b.matchId===matchId&&b.playerId===m.entityA)) {
-        const b={id:genId(),playerId:m.entityA,playerName:p.name,score:m.highBreakA,matchId,date:m.date,venue:m.venue,frame:null};
-        APP.breaks.push(b);
-        await persistInLeague('breaks',b.id,b);
-      }
-    }
-    if (m.highBreakB>=(APP.config.highBreakThreshold??50)) {
-      const p = APP.players.find(p=>p.id===m.entityB);
-      if (p && !APP.breaks.find(b=>b.matchId===matchId&&b.playerId===m.entityB)) {
-        const b={id:genId(),playerId:m.entityB,playerName:p.name,score:m.highBreakB,matchId,date:m.date,venue:m.venue,frame:null};
-        APP.breaks.push(b);
-        await persistInLeague('breaks',b.id,b);
+    for (const [score, pid] of [[m.highBreakA, m.entityA],[m.highBreakB, m.entityB]]) {
+      if (score >= (APP.config.highBreakThreshold??50)) {
+        const p = APP.players.find(x=>x.id===pid);
+        if (p && !APP.breaks.find(b=>b.matchId===matchId&&b.playerId===pid)) {
+          const b = {id:genId(),playerId:pid,playerName:p.name,score,matchId,date:m.date,venue:m.venue,frame:null};
+          APP.breaks.push(b);
+          await persistInLeague('breaks', b.id, b);
+        }
       }
     }
   }
 
-  await persistInLeague('bracketMatches', matchId, m);
-  // Persist all bracket matches (in case advance changed multiple)
-  await Promise.all(APP.bracketMatches.map(bm=>persistInLeague('bracketMatches',bm.id,bm)));
+  // Persist all matches in the correct collection
+  await Promise.all(matchArray.map(bm => persistInLeague(col, bm.id, bm)));
   saveActiveToLocal();
   closeModal();
   toast('Score saved — bracket updated ✓');
+  APP.tab = 'fixtures';
   render();
+  requestAnimationFrame(()=>{ try { drawBracketLines(); } catch(e){} });
 }
 
 // ── SEED BRACKET ──────────────────────────────────────────
