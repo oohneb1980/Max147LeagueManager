@@ -6612,18 +6612,19 @@ function advanceBracket(completedMatch) {
 
   // ── Losers bracket progression ──
   if (slot === 'L') {
-    const nextRound    = round + 1;
-    const nextMatchIdx = Math.floor(matchIndex / 2);
+    const nextRound = round + 1;
+    // Odd LB rounds (minor→major): one-to-one mapping (nextIdx = matchIndex)
+    // Even LB rounds (major→minor): halving (nextIdx = floor(matchIndex/2))
+    const nextMatchIdx = round % 2 === 1 ? matchIndex : Math.floor(matchIndex / 2);
     const nextLB = APP.bracketMatches.find(m =>
       m.slot === 'L' && m.round === nextRound && m.matchIndex === nextMatchIdx
     );
     if (nextLB) {
-      // LB survivor always fills entityA (entityB reserved for incoming WB loser)
-      if (nextLB.entityA === 'TBD') nextLB.entityA = winnerId;
+      if (nextLB.entityA === 'TBD')      nextLB.entityA = winnerId;
       else if (nextLB.entityB === 'TBD') nextLB.entityB = winnerId;
       if (nextLB.entityA !== 'TBD' && nextLB.entityB !== 'TBD') nextLB.status = 'scheduled';
     } else {
-      // No next LB round → this is the LB Final winner → GF entityB
+      // LB Final winner → GF entityB
       const gf = APP.bracketMatches.find(m => m.slot === 'GF' && m.round === 1);
       if (gf && gf.entityB === 'TBD') {
         gf.entityB = winnerId;
