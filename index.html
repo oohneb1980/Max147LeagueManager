@@ -1016,6 +1016,7 @@ tbody tr:nth-child(n+6){ animation-delay: 100ms;}
 .bracket-canvas {
   position: relative;
   min-width: max-content;
+  overflow-x: auto;
 }
 /* SVG connector lines */
 .bracket-svg {
@@ -1026,23 +1027,22 @@ tbody tr:nth-child(n+6){ animation-delay: 100ms;}
 .bracket-round {
   display: inline-flex; flex-direction: column;
   vertical-align: top; position: relative;
-  /* Each round is a fixed-height column;
-     matches are evenly distributed with space-around */
+  min-width: 210px;
 }
 .bracket-round-label {
-  font-size: 11px; font-weight: 600; color: var(--gold);
-  padding: 0 0 6px 8px; white-space: nowrap;
+  font-size: 11px; font-weight: 700; color: var(--gold);
+  padding: 0 0 6px 10px; white-space: nowrap;
   height: 24px; display: flex; align-items: flex-end;
-  flex-shrink: 0;
+  flex-shrink: 0; text-transform: uppercase; letter-spacing: .04em;
 }
 .bracket-slots {
   display: flex; flex-direction: column;
   justify-content: space-around; flex: 1;
 }
 .bracket-slot-spacer { flex: 1; }
-/* Match node */
+/* Match card */
 .bracket-match {
-  width: 180px; margin: 0 24px;
+  width: 172px; margin: 0 18px;
   background: var(--bg-card); border: 1px solid var(--border);
   border-radius: var(--r); overflow: hidden;
   cursor: pointer; transition: border-color .12s;
@@ -5941,118 +5941,112 @@ function renderBracket(isGroupKO=false) {
 
   const wRounds = buildBracketRounds('W');
   const lRounds = isDouble ? buildBracketRounds('L') : [];
-  const gfMatch = isDouble ? APP.bracketMatches.find(m=>m.slot==='GF') : null;
+  const gfMatch = isDouble ? APP.bracketMatches.find(m=>m.slot==='GF'&&m.round===1) : null;
 
   const wTotal = wRounds.length;
   const lTotal = lRounds.length;
 
-  // Summary stats
-  const total = APP.bracketMatches.length;
-  const played = APP.bracketMatches.filter(m=>m.status==='completed').length;
-  const live   = APP.bracketMatches.filter(m=>m.status==='live').length;
+  const total     = APP.bracketMatches.length;
+  const played    = APP.bracketMatches.filter(m=>m.status==='completed').length;
+  const live      = APP.bracketMatches.filter(m=>m.status==='live').length;
   const remaining = APP.bracketMatches.filter(m=>m.status==='scheduled'&&m.entityA!=='TBD'&&m.entityB!=='TBD').length;
 
-  // Build winners bracket HTML
-  let wBracketHTML = `<div style="display:flex;align-items:flex-start;gap:0;position:relative">
-    <svg id="bracket-svg-w" class="bracket-svg" width="100%" height="100%"></svg>`;
+  // ── Layout constants ──────────────────────────────────────
+  // SLOT_H: vertical space per match slot in the largest round
+  // All rounds share the same total column height so matches
+  // align correctly across rounds.
+  const SLOT_H   = 120; // px per match in the first (largest) WB round
+  const WB_H     = wRounds.length ? wRounds[0].length * SLOT_H : SLOT_H;
+  // LB first round match count
+  const LB_R1_MC = lRounds.length ? lRounds[0].length : 0;
+  // LB columns should be taller than WB because LB R1 has the most matches
+  // Use the same SLOT_H so both brackets have consistent card spacing
+  const LB_H     = LB_R1_MC * SLOT_H;
 
-  // Base height on the LARGEST visible round (exclude BYE-only matches from R1)
-  const visibleR1 = wRounds.length
-    ? wRounds[0].filter(m => !(m.status==='completed' && (m.entityA==='BYE'||m.entityB==='BYE'))).length
-    : 0;
-  // R2 always has half the slots of the full bracket — use that as the canonical height base
-  const baseMatchCount = wRounds.length > 1 ? wRounds[1].length : Math.max(visibleR1, 1);
-  const SLOT_H    = 110;
-  const BRACKET_H = baseMatchCount * SLOT_H;
+  // ── WINNERS BRACKET ───────────────────────────────────────
+  let wBracketHTML = `<div style="display:flex;align-items:flex-start;gap:0;position:relative;overflow-x:auto">
+    <svg id="bracket-svg-w" class="bracket-svg" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;overflow:visible"></svg>`;
 
   wRounds.forEach((round, ri) => {
     const rNum = ri + 1;
-    // Filter out auto-completed BYE matches from display
-    // They've already advanced the player to R2 via advanceBracket
     const displayMatches = round.filter(m =>
       !(m.status === 'completed' && (m.entityA === 'BYE' || m.entityB === 'BYE'))
     );
-    // Skip rendering rounds that have no visible matches
-    // (e.g. if ALL R1 matches were BYEs → n is a power of 2 edge case)
     if (displayMatches.length === 0) return;
 
-    wBracketHTML += `<div class="bracket-round" style="height:${BRACKET_H + 24}px">
+    wBracketHTML += `<div class="bracket-round" style="height:${WB_H + 28}px;flex-shrink:0">
       <div class="bracket-round-label">${roundLabel(rNum, wTotal, 'W')}</div>
       <div class="bracket-slots">`;
     displayMatches.forEach(m => {
-      wBracketHTML += `<div style="display:flex;align-items:center">${renderBracketMatch(m)}</div>`;
+      wBracketHTML += `<div style="display:flex;align-items:center;justify-content:center">${renderBracketMatch(m)}</div>`;
     });
     wBracketHTML += `</div></div>`;
   });
 
   // Champion column
-  const champ = champion
-    ? `<div class="bracket-round" style="padding-top:56px"><div class="bracket-round-label">Champion</div>
-        <div style="padding-top:${Math.max(40,(wRounds[wTotal-1]||[{}]).length*20)}px">
-        <div class="bracket-champion"><div class="bc-label">🏆 Champion</div><div class="bc-name">${champion}</div></div>
-        </div></div>`
-    : '';
+  if (champion) {
+    wBracketHTML += `<div class="bracket-round" style="height:${WB_H + 28}px;flex-shrink:0;justify-content:center">
+      <div class="bracket-round-label">Champion</div>
+      <div class="bracket-slots">
+        <div style="display:flex;align-items:center;justify-content:center">
+          <div class="bracket-champion"><div class="bc-label">🏆 Champion</div><div class="bc-name">${champion}</div></div>
+        </div>
+      </div>
+    </div>`;
+  }
 
-  wBracketHTML += champ + `</div>`;
+  wBracketHTML += `</div>`;
 
-  // Losers bracket HTML
+  // ── LOSERS BRACKET ────────────────────────────────────────
   let lBracketHTML = '';
   if (isDouble && lRounds.length) {
-    lBracketHTML = `<div style="margin-top:28px">
-      <div class="bracket-divider"><span class="bracket-divider-label">LOSERS BRACKET</span></div>
-      <div style="display:flex;align-items:flex-start;gap:0;position:relative">
-        <svg id="bracket-svg-l" class="bracket-svg" width="100%" height="100%"></svg>`;
+    lBracketHTML = `
+      <div class="bracket-divider" style="margin-top:32px"><span class="bracket-divider-label">LOSERS BRACKET</span></div>
+      <div style="display:flex;align-items:flex-start;gap:0;position:relative;overflow-x:auto;margin-top:8px">
+        <svg id="bracket-svg-l" class="bracket-svg" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;overflow:visible"></svg>`;
 
-    const lBaseCount = lRounds.length ? lRounds[0].length : 1;
-    const L_BRACKET_H = lBaseCount * SLOT_H;
     lRounds.forEach((round, ri) => {
-      const rNum = ri+1;
-      lBracketHTML += `<div class="bracket-round" style="height:${L_BRACKET_H + 24}px">
-        <div class="bracket-round-label" style="color:var(--red)">${roundLabel(rNum,lTotal,'L')}</div>
+      const rNum = ri + 1;
+      lBracketHTML += `<div class="bracket-round" style="height:${LB_H + 28}px;flex-shrink:0">
+        <div class="bracket-round-label" style="color:var(--red)">${roundLabel(rNum, lTotal, 'L')}</div>
         <div class="bracket-slots">`;
       round.forEach(m => {
-        lBracketHTML += `<div style="display:flex;align-items:center">${renderBracketMatch(m)}</div>`;
+        lBracketHTML += `<div style="display:flex;align-items:center;justify-content:center">${renderBracketMatch(m)}</div>`;
       });
       lBracketHTML += `</div></div>`;
     });
+
     lBracketHTML += `</div>`;
 
-    // Grand Final + bracket reset
+    // Grand Final
     if (gfMatch) {
-      const gf2Match = APP.bracketMatches.find(m=>m.slot==='GF'&&m.round===2);
-      const gf1Done  = gfMatch.status === 'completed';
-      const needsReset = gf1Done && gfMatch.winnerId === gfMatch.entityB; // LB winner won GF1
-      lBracketHTML += `<div style="margin-top:20px">
-        <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
-          <div>
-            <div style="font-size:11px;font-weight:700;color:var(--gold);margin-bottom:6px">⚔️ Grand Final</div>
-            <div style="font-size:11px;color:var(--ink-3);margin-bottom:8px">
-              ${gf1Done?'':'WB finalist (undefeated) vs LB finalist (1 loss)'}
-            </div>
-          </div>
+      const gf2Match  = APP.bracketMatches.find(m => m.slot==='GF' && m.round===2);
+      const gf1Done   = gfMatch.status === 'completed';
+      const needsReset = gf1Done && gfMatch.winnerId === gfMatch.entityB;
+
+      lBracketHTML += `<div style="margin-top:32px;padding:20px;background:var(--bg-raised);border-radius:var(--r);border:1px solid var(--border);display:inline-flex;flex-direction:column;gap:12px;min-width:320px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:14px;font-weight:700;color:var(--gold)">⚔️ Grand Final</span>
+          ${!gf1Done ? `<span style="font-size:11px;color:var(--ink-3)">WB winner (undefeated) vs LB winner (1 loss)</span>` : ''}
         </div>
-        <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
           ${renderBracketMatch(gfMatch, {grandFinal:true})}
-          ${!gf1Done?`<div style="font-size:12px;color:var(--ink-3);max-width:180px;line-height:1.5">
-            If <strong style="color:var(--ink)">WB winner</strong> wins → 🏆 Champion<br>
-            If <strong style="color:var(--ink)">LB winner</strong> wins → bracket reset played
-          </div>`:''}
+          ${!gf1Done ? `<div style="font-size:12px;color:var(--ink-3);line-height:1.7">
+            <div>WB winner wins → 🏆 Champion</div>
+            <div>LB winner wins → 🔄 Bracket reset</div>
+          </div>` : ''}
         </div>
         ${needsReset && gf2Match ? `
-        <div style="margin-top:16px">
-          <div style="font-size:11px;font-weight:700;color:var(--amber);margin-bottom:6px">🔄 Bracket Reset</div>
-          <div style="font-size:11px;color:var(--ink-3);margin-bottom:8px">Both players have 1 loss — winner takes all</div>
+        <div style="border-top:1px solid var(--border);padding-top:12px">
+          <div style="font-size:11px;font-weight:700;color:var(--amber);margin-bottom:8px">🔄 Bracket Reset — both players have 1 loss</div>
           ${renderBracketMatch(gf2Match, {grandFinal:true})}
-        </div>`:
-        gf2Match && gf2Match.status==='if_needed'?`
-        <div style="margin-top:12px;padding:8px 12px;background:var(--bg-raised);border-radius:var(--r);font-size:11px;color:var(--ink-3)">
-          🔄 Bracket reset match — only played if LB winner wins Grand Final
-        </div>`:''}
-        ${champion?`<div class="bracket-champion" style="width:200px;margin-top:16px"><div class="bc-label">🏆 Champion</div><div class="bc-name">${champion}</div></div>`:''}
+        </div>` : gf2Match && gf2Match.status==='if_needed' ? `
+        <div style="font-size:11px;color:var(--ink-3);border-top:1px solid var(--border);padding-top:10px">
+          🔄 Bracket reset only played if LB winner wins Grand Final
+        </div>` : ''}
+        ${champion ? `<div class="bracket-champion" style="margin-top:4px"><div class="bc-label">🏆 Champion</div><div class="bc-name">${champion}</div></div>` : ''}
       </div>`;
     }
-
-    lBracketHTML += `</div>`;
   }
 
   // Info panel — upcoming ready matches
@@ -6333,40 +6327,73 @@ function openSeedBracket() {
 // or to recover from a desync between Firestore and in-memory state.
 async function repairBracket() {
   if (!canEditCompetition(APP.activeLeagueId)) { toast("You don't have permission"); return; }
-  if (!confirm('This will re-calculate all bracket routing from completed match results. Continue?')) return;
 
-  // Reset all TBD slots in non-R1 matches — keep R1 seeds and completed results
+  const wbCompleted = APP.bracketMatches.filter(m => m.slot==='W' && m.status==='completed');
+  const lbExists    = APP.bracketMatches.some(m => m.slot==='L');
+
+  openModal('Repair bracket routing',
+    `<div style="padding:8px 0;font-size:13px;color:var(--ink-2);line-height:1.7">
+      <p>This will:</p>
+      <ul style="margin:8px 0 0 18px">
+        <li>Keep all <strong style="color:var(--green)">${wbCompleted.length} completed WB results</strong></li>
+        <li>Reset all LB slots and re-route losers using correct logic</li>
+        <li>Reset WB R2+ TBD slots and re-route WB winners</li>
+        <li>Persist corrected bracket to Firestore</li>
+      </ul>
+    </div>`,
+    `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="closeModal();_doRepairBracket()">Repair now</button>`
+  );
+}
+
+async function _doRepairBracket() {
+  if (!canEditCompetition(APP.activeLeagueId)) return;
+
+  // Step 1: Collect ONLY WB R1 matches (seeds are ground truth)
+  // and all completed WB matches (results are ground truth)
+  const wbR1 = APP.bracketMatches.filter(m => m.slot==='W' && m.round===1);
+  const wbCompleted = APP.bracketMatches
+    .filter(m => m.slot==='W' && m.status==='completed')
+    .sort((a,b) => a.round-b.round || a.matchIndex-b.matchIndex);
+
+  // Step 2: Full reset — clear everything except WB R1 seeds
   APP.bracketMatches.forEach(m => {
-    if (m.status === 'completed') return; // keep completed matches intact
-    if (m.slot === 'GF' && m.round === 2) { m.status = 'if_needed'; m.entityA='TBD'; m.entityB='TBD'; return; }
-    if (m.slot === 'GF') { m.entityA='TBD'; m.entityB='TBD'; m.status='scheduled'; return; }
-    // For WB: keep R1 seeds, reset later rounds
-    if (m.slot === 'W' && m.round > 1) { m.entityA='TBD'; m.entityB='TBD'; }
-    // For LB: reset all (they're all filled by advanceBracket)
-    if (m.slot === 'L') { m.entityA='TBD'; m.entityB='TBD'; }
-    m.winnerId = null; m.loserId = null;
-    if (m.entityA !== 'TBD' && m.entityB !== 'TBD') m.status = 'scheduled';
-    else m.status = 'scheduled';
+    if (m.slot === 'W' && m.round === 1) {
+      // Keep R1 seeds and results — these are ground truth
+      return;
+    }
+    // Reset everything else
+    m.entityA  = 'TBD';
+    m.entityB  = 'TBD';
+    m.winnerId = null;
+    m.loserId  = null;
+    m.status   = m.slot === 'GF' && m.round === 2 ? 'if_needed' : 'scheduled';
   });
 
-  // Re-run advanceBracket on all completed matches in round order
-  const completed = APP.bracketMatches
-    .filter(m => m.status === 'completed' && m.winnerId)
-    .sort((a, b) => {
-      // Process WB before LB, earlier rounds first
-      const slotOrder = {W:0, L:1, GF:2};
-      if (a.slot !== b.slot) return (slotOrder[a.slot]||0) - (slotOrder[b.slot]||0);
-      return a.round - b.round || a.matchIndex - b.matchIndex;
-    });
-
-  for (const m of completed) {
+  // Step 3: Replay ALL completed WB matches through advanceBracket
+  // This re-routes both winners (to next WB round) and losers (to correct LB round)
+  for (const m of wbCompleted) {
     advanceBracket(m);
   }
 
-  // Persist all repaired bracket matches
+  // Step 4: Replay completed LB matches that can now be determined
+  // Sort: process lower rounds first so winners flow correctly
+  for (let pass = 0; pass < 10; pass++) {
+    const lbReady = APP.bracketMatches.filter(m =>
+      m.slot === 'L' &&
+      m.status === 'scheduled' &&
+      m.entityA !== 'TBD' &&
+      m.entityB !== 'TBD'
+    ).sort((a,b) => a.round - b.round || a.matchIndex - b.matchIndex);
+    if (!lbReady.length) break;
+    // We can't replay LB results (we don't know who won) — just leave them scheduled
+    break;
+  }
+
+  // Step 5: Persist all
   await Promise.all(APP.bracketMatches.map(m => persistInLeague('bracketMatches', m.id, m)));
   saveActiveToLocal();
-  toast(`Bracket repaired — ${completed.length} matches reprocessed ✓`);
+  toast(`Bracket repaired ✓ — ${wbCompleted.length} WB results replayed, LB slots recalculated`);
   render();
   requestAnimationFrame(()=>{ try { drawBracketLines(); } catch(e){} });
 }
